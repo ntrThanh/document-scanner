@@ -1,0 +1,257 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Document Segmentation</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <header class="hero">
+        <div class="hero-content">
+            <h1>Document Segmentation</h1>
+        </div>
+    </header>
+
+    <main class="container">
+        <section class="workspace">
+            <aside class="left-stack">
+                <section class="card">
+                    <div class="card-title">
+                        <span class="step-index">1</span>
+                        <div>
+                            <h2>Chọn ảnh</h2>
+                            <p>Kéo thả hoặc chọn nhiều ảnh cần xử lý.</p>
+                        </div>
+                    </div>
+                    <div id="dropZone" class="drop-zone">
+                        <input id="fileInput" type="file" accept="image/*" multiple hidden>
+                        <div class="drop-icon">📄</div>
+                        <strong>Kéo thả ảnh vào đây</strong>
+                        <span>hoặc bấm để chọn ảnh</span>
+                    </div>
+                    <div id="selectedFiles" class="file-list">Chưa chọn ảnh</div>
+                    <div class="actions sticky-actions">
+                        <button id="uploadBtn">Upload ảnh</button>
+                        <button id="clearBtn" class="secondary">Xóa cache</button>
+                    </div>
+                </section>
+
+                <section class="card queue-card">
+                    <div class="card-title compact-title">
+                        <span class="step-index">2</span>
+                        <div>
+                            <h2>Hàng chờ</h2>
+                            <p id="queueSummary">Chưa có ảnh</p>
+                        </div>
+                    </div>
+                    <div id="queueList" class="queue-list"></div>
+                </section>
+            </aside>
+
+            <section class="right-stack">
+                <section class="card">
+                    <div class="card-title">
+                        <span class="step-index">3</span>
+                        <div>
+                            <h2>Chọn cách xử lý</h2>
+                            <p>Pipeline gốc vẫn giữ đầy đủ tham số. YOLO sẽ tự dùng lại model `.pt` đã upload trước đó nếu còn trong thư mục models.</p>
+                        </div>
+                    </div>
+
+                    <div class="mode-tabs" role="tablist">
+                        <label class="mode-option active" id="opencvTab">
+                            <input type="radio" name="processor" value="opencv" checked>
+                            <span>Pipeline gốc</span>
+                        </label>
+                        <label class="mode-option" id="yoloTab">
+                            <input type="radio" name="processor" value="yolo">
+                            <span>YOLO Segment</span>
+                        </label>
+                    </div>
+
+                    <div id="opencvPanel" class="config-panel">
+                        <div class="settings-grid">
+                            <label>Kiểu ảnh
+                                <select id="mode">
+                                    <option value="color">Ảnh màu</option>
+                                    <option value="gray">Ảnh xám</option>
+                                </select>
+                            </label>
+                            <label>Cân bằng sáng ảnh màu
+                                <select id="illuminationMethod">
+                                    <option value="lab">LAB</option>
+                                    <option value="hsv">HSV</option>
+                                </select>
+                            </label>
+                            <label>Cân bằng sáng ảnh xám
+                                <select id="grayEqualizationMethod">
+                                    <option value="clahe">CLAHE</option>
+                                    <option value="he">Histogram Equalization</option>
+                                </select>
+                            </label>
+                            <label>Phát hiện biên
+                                <select id="edgeMethod">
+                                    <option value="canny">Canny</option>
+                                    <option value="sobel">Sobel</option>
+                                </select>
+                            </label>
+                            <label>Hình thái học
+                                <select id="morphOperation">
+                                    <option value="closing">Closing</option>
+                                    <option value="opening">Opening</option>
+                                    <option value="erosion">Erosion</option>
+                                    <option value="dilation">Dilation</option>
+                                </select>
+                            </label>
+                        </div>
+
+                        <details class="accordion" open>
+                            <summary>Các bước xử lý</summary>
+                            <div id="stepsBox" class="steps-box"></div>
+                        </details>
+
+                        <details class="accordion">
+                            <summary>Tham số pipeline gốc</summary>
+                            <div class="params-grid">
+                                <label>Gaussian ksize<input id="gaussianKsize" type="number" value="5" min="1" step="2"></label>
+                                <label>Median ksize<input id="medianKsize" type="number" value="5" min="1" step="2"></label>
+                                <label>Sharpen amount<input id="sharpenAmount" type="number" value="1.0" min="0" step="0.1"></label>
+                                <label>CLAHE clip<input id="claheClipLimit" type="number" value="2.0" min="0.1" step="0.1"></label>
+                                <label>CLAHE tile<input id="claheTileGrid" type="number" value="8" min="1" step="1"></label>
+                                <label>Sobel ksize<input id="sobelKsize" type="number" value="3" min="1" step="2"></label>
+                                <label>Sobel threshold<input id="sobelThreshold" type="number" value="60" min="0" step="1"></label>
+                                <label>Canny low<input id="cannyLow" type="number" value="50" min="0" step="1"></label>
+                                <label>Canny high<input id="cannyHigh" type="number" value="150" min="0" step="1"></label>
+                                <label>Morph kernel<input id="morphKernel" type="number" value="5" min="1" step="1"></label>
+                                <label>Morph iterations<input id="morphIterations" type="number" value="1" min="1" step="1"></label>
+                                <label>Min area ratio<input id="contourMinAreaRatio" type="number" value="0.08" min="0" max="1" step="0.01"></label>
+                                <label>Enhance alpha<input id="enhanceAlpha" type="number" value="1.15" min="0" step="0.05"></label>
+                                <label>Enhance beta<input id="enhanceBeta" type="number" value="8" step="1"></label>
+                                <label>Tăng cường ảnh
+                                    <select id="enhanceMethod">
+                                        <option value="contrast">Contrast/CLAHE</option>
+                                        <option value="otsu" selected>Threshold Otsu</option>
+                                        <option value="adaptive">Threshold Adaptive</option>
+                                    </select>
+                                </label>
+                                <label>Otsu blur ksize<input id="otsuBlurKsize" type="number" value="3" min="1" step="2"></label>
+                                <label>Adaptive block size<input id="adaptiveBlockSize" type="number" value="31" min="3" step="2"></label>
+                                <label>Adaptive C<input id="adaptiveC" type="number" value="7" step="1"></label>
+                                <label>Trực quan cả Otsu và Adaptive
+                                    <select id="showBothThresholds">
+                                        <option value="false">Không</option>
+                                        <option value="true">Có</option>
+                                    </select>
+                                </label>
+                            </div>
+                        </details>
+                    </div>
+
+                    <div id="yoloPanel" class="config-panel hidden">
+                        <div class="yolo-upload-box">
+                            <input id="modelInput" type="file" accept=".pt" hidden>
+                            <div>
+                                <h3>Upload / dùng lại model YOLO `.pt`</h3>
+                                <p>Nếu đã upload model trước đó, hệ thống sẽ tự dùng lại, không cần upload lại.</p>
+                                <div id="modelStatus" class="model-status">Chưa có model</div>
+                            </div>
+                            <button id="chooseModelBtn" class="secondary" type="button">Chọn .pt</button>
+                        </div>
+                        <div class="settings-grid two-cols">
+                            <label>YOLO confidence
+                                <input id="yoloConfidence" type="number" min="0" max="1" step="0.01" value="0.25">
+                            </label>
+                            <label>Mask threshold
+                                <input id="yoloMaskThreshold" type="number" min="0" max="1" step="0.01" value="0.5">
+                            </label>
+                        </div>
+
+                        <details class="accordion" open>
+                            <summary>Các bước tiền xử lý YOLO</summary>
+                            <div class="steps-box yolo-steps-box">
+                                <label class="step-item"><input type="checkbox" data-yolo-step="gaussian_blur"> <span>Gaussian Blur</span></label>
+                                <label class="step-item"><input type="checkbox" data-yolo-step="median_blur" checked> <span>Median Blur</span></label>
+                                <label class="step-item"><input type="checkbox" data-yolo-step="sharpen"> <span>Làm sắc ảnh</span></label>
+                                <label class="step-item"><input type="checkbox" data-yolo-step="illumination"> <span>Cân bằng sáng</span></label>
+                                <label class="step-item"><input type="checkbox" data-yolo-step="enhance" checked> <span>Tăng cường sau cắt</span></label>
+                            </div>
+                        </details>
+
+                        <details class="accordion" open>
+                            <summary>Tham số YOLO segmentation</summary>
+                            <div class="params-grid">
+                                <label>YOLO Gaussian ksize<input id="yoloGaussianKsize" type="number" value="3" min="1" step="2"></label>
+                                <label>YOLO Median ksize<input id="yoloMedianKsize" type="number" value="3" min="1" step="2"></label>
+                                <label>YOLO Sharpen amount<input id="yoloSharpenAmount" type="number" value="1.0" min="0" step="0.1"></label>
+                                <label>Cân bằng sáng YOLO
+                                    <select id="yoloIlluminationMethod">
+                                        <option value="lab">LAB</option>
+                                        <option value="hsv">HSV</option>
+                                    </select>
+                                </label>
+                                <label>Tăng cường ảnh YOLO
+                                    <select id="yoloEnhanceMethod">
+                                        <option value="contrast">Contrast/CLAHE</option>
+                                        <option value="otsu" selected>Threshold Otsu</option>
+                                        <option value="adaptive">Threshold Adaptive</option>
+                                    </select>
+                                </label>
+                                <label>YOLO Otsu blur ksize<input id="yoloOtsuBlurKsize" type="number" value="3" min="1" step="2"></label>
+                                <label>YOLO Adaptive block size<input id="yoloAdaptiveBlockSize" type="number" value="31" min="3" step="2"></label>
+                                <label>YOLO Adaptive C<input id="yoloAdaptiveC" type="number" value="7" step="1"></label>
+                                <label>Trực quan cả Otsu và Adaptive
+                                    <select id="yoloShowBothThresholds">
+                                        <option value="false">Không</option>
+                                        <option value="true">Có</option>
+                                    </select>
+                                </label>
+                                <label>Ảnh dùng để perspective
+                                    <select id="yoloWarpSource">
+                                        <option value="preprocessed" selected>Ảnh đã làm mịn/cân bằng sáng</option>
+                                        <option value="original">Ảnh gốc</option>
+                                    </select>
+                                </label>
+                            </div>
+                        </details>
+
+                        <div class="note-box">
+                            Luồng YOLO: ảnh gốc → làm mịn/cân bằng sáng tùy chọn → YOLO mask → lấy biên ngoài lớn nhất của mask → chọn 4 góc → perspective transform → tăng cường ảnh bằng Contrast, Otsu, Adaptive hoặc trực quan cả Otsu và Adaptive.
+                        </div>
+                    </div>
+
+                    <div class="actions run-actions">
+                        <button id="runBtn">Chạy xử lý</button>
+                        <button id="defaultBtn" class="secondary">Dùng mặc định</button>
+                    </div>
+                </section>
+
+                <section class="card results-card">
+                    <div class="card-title compact-title">
+                        <span class="step-index">4</span>
+                        <div>
+                            <h2>Kết quả</h2>
+                            <p>Ảnh gốc, ảnh cuối cùng và các bước trung gian.</p>
+                        </div>
+                    </div>
+                    <div id="results" class="results empty-state">Chưa có kết quả</div>
+                </section>
+            </section>
+        </section>
+    </main>
+
+    <div id="imageViewer" class="image-viewer hidden" aria-hidden="true">
+        <div class="viewer-toolbar">
+            <button id="viewerZoomOut" class="secondary" type="button">−</button>
+            <button id="viewerZoomReset" class="secondary" type="button">100%</button>
+            <button id="viewerZoomIn" class="secondary" type="button">+</button>
+            <button id="viewerClose" type="button">Đóng</button>
+        </div>
+        <div id="viewerCanvas" class="viewer-canvas">
+            <img id="viewerImage" alt="preview">
+        </div>
+    </div>
+
+    <script src="/static/script.js?v=5"></script>
+</body>
+</html>
