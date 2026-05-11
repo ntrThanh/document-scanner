@@ -2,6 +2,8 @@
 
 Ứng dụng web demo phân đoạn tài liệu bằng **FastAPI + OpenCV** và có thêm chế độ **YOLO segmentation**. Pipeline gốc vẫn được giữ nguyên để có thể bật/tắt từng bước và chỉnh tham số trực tiếp trên giao diện.
 
+![Scan app](https://raw.githubusercontent.com/ntrThanh/document-scanner/refs/heads/master/static/assets/Example.png)
+
 ## Chức năng chính
 
 - Upload một hoặc nhiều ảnh.
