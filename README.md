@@ -1,4 +1,4 @@
----
+<!-- ---
 license: mit
 language:
   - vi
@@ -13,7 +13,7 @@ tags:
   - yolo
   - mineru
 pipeline_tag: image-segmentation
----
+--- -->
 
 # Document Segmentation FastAPI
 
