@@ -1,6 +1,6 @@
 import os
 import shutil
-from typing import Dict, List, Tuple
+from typing import Dict
 
 import cv2
 import numpy as np
@@ -56,6 +56,28 @@ DEFAULT_CONFIG = {
         "yolo_adaptive_c": 7,
         "yolo_show_both_thresholds": False,
         "yolo_warp_source": "preprocessed",
+        "hough_canny_low": 50,
+        "hough_canny_high": 150,
+        "hough_threshold": 80,
+        "hough_min_line_length_ratio": 0.25,
+        "hough_max_line_gap": 20,
+        "hough_line_thickness": 4,
+        "hough_morph_kernel": 9,
+        "hough_morph_iterations": 2,
+        "hough_gaussian_ksize": 3,
+        "hough_median_ksize": 3,
+        "hough_sharpen_amount": 1.0,
+        "hough_enhance_method": "otsu",
+        "hough_otsu_blur_ksize": 3,
+        "hough_adaptive_block_size": 31,
+        "hough_adaptive_c": 7,
+        "hough_show_both_thresholds": False,
+        "hough_warp_source": "preprocessed",
+        "manual_enhance_method": "otsu",
+        "manual_otsu_blur_ksize": 3,
+        "manual_adaptive_block_size": 31,
+        "manual_adaptive_c": 7,
+        "manual_show_both_thresholds": False,
     },
     "yolo_steps": {
         "gaussian_blur": False,
@@ -66,6 +88,28 @@ DEFAULT_CONFIG = {
     },
     "yolo": {
         "model_path": "",
+    },
+    "hough_steps": {
+        "gaussian_blur": True,
+        "median_blur": True,
+        "sharpen": False,
+        "illumination": True,
+        "morphology": True,
+        "enhance": True,
+    },
+    "manual_steps": {
+        "enhance": True,
+    },
+    "manual": {
+        "corners_by_image": {},
+    },
+    "mineru": {
+        "method": "ocr",
+        "backend": "pipeline",
+        "lang": "",
+        "formula": True,
+        "table": True,
+        "timeout_seconds": 3600,
     },
 }
 
@@ -596,6 +640,207 @@ class YoloDocumentSegmenter(SegmentationBase):
         return mask
 
 
+class HoughDocumentSegmenter(SegmentationBase):
+    def _hough_step_enabled(self, step_name):
+        hough_steps = self.config.get("hough_steps", {})
+        if not hough_steps:
+            return DEFAULT_CONFIG["hough_steps"].get(step_name, False)
+        return bool(hough_steps.get(step_name, DEFAULT_CONFIG["hough_steps"].get(step_name, False)))
+
+    def _hough_param(self, name, fallback_name=None):
+        params = self.config.get("params", {})
+        if name in params:
+            return params.get(name)
+        if fallback_name and fallback_name in params:
+            return params.get(fallback_name)
+        return DEFAULT_CONFIG["params"].get(name, DEFAULT_CONFIG["params"].get(fallback_name))
+
+    def step_by_step_hough(self, image):
+        original = image.copy()
+        current = image.copy()
+        steps, names = [original.copy()], ["original"]
+
+        if self._hough_step_enabled("gaussian_blur"):
+            k = self._odd(self._hough_param("hough_gaussian_ksize", "gaussian_ksize"))
+            current = cv2.GaussianBlur(current, (k, k), 0)
+            self._add(steps, names, current, "hough_gaussian_blur")
+
+        if self._hough_step_enabled("median_blur"):
+            k = self._odd(self._hough_param("hough_median_ksize", "median_ksize"))
+            current = cv2.medianBlur(current, k)
+            self._add(steps, names, current, "hough_median_blur")
+
+        if self._hough_step_enabled("sharpen"):
+            old_amount = self.config.get("params", {}).get("sharpen_amount")
+            self.config.setdefault("params", {})["sharpen_amount"] = self._hough_param("hough_sharpen_amount", "sharpen_amount")
+            current = self._sharpen(current)
+            if old_amount is None:
+                self.config.get("params", {}).pop("sharpen_amount", None)
+            else:
+                self.config["params"]["sharpen_amount"] = old_amount
+            self._add(steps, names, current, "hough_sharpen")
+
+        if self._hough_step_enabled("illumination"):
+            method = self.config.get("illumination_method", "lab")
+            current = self._equalize_color(current, method)
+            self._add(steps, names, current, f"hough_illumination_{method}")
+
+        gray = cv2.cvtColor(current, cv2.COLOR_BGR2GRAY) if len(current.shape) == 3 else current.copy()
+        low = int(self._hough_param("hough_canny_low", "canny_low") or 50)
+        high = int(self._hough_param("hough_canny_high", "canny_high") or 150)
+        edges = cv2.Canny(gray, low, high)
+        self._add(steps, names, edges, "hough_canny_edges")
+
+        lines = self._detect_hough_lines(edges)
+        line_vis = self._draw_hough_lines(current, lines)
+        self._add(steps, names, line_vis, "hough_lines")
+
+        line_mask = self._line_mask(edges.shape[:2], lines)
+        self._add(steps, names, line_mask, "hough_line_mask")
+
+        search_mask = line_mask
+        if self._hough_step_enabled("morphology"):
+            search_mask = self._hough_morphology(search_mask)
+            self._add(steps, names, search_mask, "hough_morphology")
+
+        contour = self._find_hough_document_contour(search_mask)
+        if contour is None:
+            contour = self._find_document_contour(edges)
+        if contour is None:
+            raise ValueError("Hough Transform không tìm thấy biên tài liệu hợp lệ")
+
+        contour_vis = self._draw_contour(current, contour)
+        self._add(steps, names, contour_vis, "hough_outer_contour")
+
+        corners = self._detect_corners(contour)
+        corners_vis = self._draw_corners(current, corners)
+        self._add(steps, names, corners_vis, "hough_detect_4_corners")
+
+        warp_source = str(self._hough_param("hough_warp_source") or "preprocessed")
+        source_for_warp = current if warp_source == "preprocessed" else original
+        warped = self._perspective_transform(source_for_warp, corners)
+        self._add(steps, names, warped, "perspective_transform")
+
+        if self._hough_step_enabled("enhance"):
+            warped = self._add_enhance_steps(
+                steps,
+                names,
+                warped,
+                prefix="hough_",
+                method_param="hough_enhance_method",
+                show_both_param="hough_show_both_thresholds",
+            )
+
+        return steps, names
+
+    def _detect_hough_lines(self, edges):
+        h, w = edges.shape[:2]
+        threshold = int(self._hough_param("hough_threshold") or 80)
+        min_line_ratio = float(self._hough_param("hough_min_line_length_ratio") or 0.25)
+        min_line_length = max(20, int(min(h, w) * min_line_ratio))
+        max_line_gap = int(self._hough_param("hough_max_line_gap") or 20)
+        lines = cv2.HoughLinesP(
+            edges,
+            rho=1,
+            theta=np.pi / 180,
+            threshold=threshold,
+            minLineLength=min_line_length,
+            maxLineGap=max_line_gap,
+        )
+        return [] if lines is None else lines.reshape(-1, 4)
+
+    def _draw_hough_lines(self, image, lines):
+        vis = image.copy()
+        if len(vis.shape) == 2:
+            vis = cv2.cvtColor(vis, cv2.COLOR_GRAY2BGR)
+        for x1, y1, x2, y2 in lines:
+            cv2.line(vis, (int(x1), int(y1)), (int(x2), int(y2)), (0, 255, 255), 2)
+        return vis
+
+    def _line_mask(self, image_hw, lines):
+        h, w = image_hw
+        mask = np.zeros((h, w), dtype=np.uint8)
+        thickness = int(self._hough_param("hough_line_thickness") or 4)
+        for x1, y1, x2, y2 in lines:
+            cv2.line(mask, (int(x1), int(y1)), (int(x2), int(y2)), 255, thickness)
+        return mask
+
+    def _hough_morphology(self, image):
+        k = int(self._hough_param("hough_morph_kernel") or 9)
+        iterations = int(self._hough_param("hough_morph_iterations") or 2)
+        kernel = np.ones((max(1, k), max(1, k)), np.uint8)
+        closed = cv2.morphologyEx(image, cv2.MORPH_CLOSE, kernel, iterations=iterations)
+        return cv2.dilate(closed, kernel, iterations=1)
+
+    def _find_hough_document_contour(self, mask):
+        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        if not contours:
+            return None
+
+        h, w = mask.shape[:2]
+        min_area = h * w * float(self._param("contour_min_area_ratio"))
+        contours = sorted(contours, key=cv2.contourArea, reverse=True)
+        for contour in contours:
+            if cv2.contourArea(contour) < min_area:
+                continue
+            peri = cv2.arcLength(contour, True)
+            approx = cv2.approxPolyDP(contour, 0.02 * peri, True)
+            return approx if len(approx) == 4 else contour
+        return None
+
+
+class ManualDocumentSegmenter(SegmentationBase):
+    def _manual_step_enabled(self, step_name):
+        manual_steps = self.config.get("manual_steps", {})
+        if not manual_steps:
+            return DEFAULT_CONFIG["manual_steps"].get(step_name, False)
+        return bool(manual_steps.get(step_name, DEFAULT_CONFIG["manual_steps"].get(step_name, False)))
+
+    def _manual_corners(self, image_id, image_shape):
+        corners_by_image = self.config.get("manual", {}).get("corners_by_image", {})
+        points = corners_by_image.get(image_id)
+        if not points or len(points) != 4:
+            raise ValueError("Bạn cần chọn đủ 4 góc thủ công cho ảnh này")
+
+        h, w = image_shape[:2]
+        corners = []
+        for point in points:
+            x = float(point.get("x", 0))
+            y = float(point.get("y", 0))
+            if 0 <= x <= 1 and 0 <= y <= 1:
+                corners.append([x * w, y * h])
+            else:
+                corners.append([x, y])
+        return self._order_points(np.array(corners, dtype=np.float32))
+
+    def step_by_step_manual(self, image_id, image):
+        original = image.copy()
+        steps, names = [original.copy()], ["original"]
+
+        corners = self._manual_corners(image_id, original.shape)
+        contour = corners.reshape(-1, 1, 2).astype(np.float32)
+        contour_vis = self._draw_contour(original, contour.astype(np.int32))
+        self._add(steps, names, contour_vis, "manual_contour")
+
+        corners_vis = self._draw_corners(original, corners)
+        self._add(steps, names, corners_vis, "manual_detect_4_corners")
+
+        warped = self._perspective_transform(original, corners)
+        self._add(steps, names, warped, "perspective_transform")
+
+        if self._manual_step_enabled("enhance"):
+            warped = self._add_enhance_steps(
+                steps,
+                names,
+                warped,
+                prefix="manual_",
+                method_param="manual_enhance_method",
+                show_both_param="manual_show_both_thresholds",
+            )
+
+        return steps, names
+
+
 class SegmentationRunner:
     def __init__(self, output_root: str):
         self.output_root = output_root
@@ -608,6 +853,12 @@ class SegmentationRunner:
         if (config or {}).get("processor") == "yolo":
             processor = YoloDocumentSegmenter(config)
             images, names = processor.step_by_step_yolo(image)
+        elif (config or {}).get("processor") == "hough":
+            processor = HoughDocumentSegmenter(config)
+            images, names = processor.step_by_step_hough(image)
+        elif (config or {}).get("processor") == "manual":
+            processor = ManualDocumentSegmenter(config)
+            images, names = processor.step_by_step_manual(image_id, image)
         else:
             processor = SegmentationBase(config)
             images, names = processor.step_by_step(image)

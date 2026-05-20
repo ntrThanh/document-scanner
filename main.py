@@ -1,6 +1,6 @@
 import asyncio
+import mimetypes
 import os
-import shutil
 from typing import Any, Dict, List, Optional
 
 from fastapi import BackgroundTasks, FastAPI, File, HTTPException, UploadFile
@@ -10,6 +10,7 @@ from fastapi.templating import Jinja2Templates
 from fastapi import Request
 from pydantic import BaseModel
 
+from app.ocr import MinerURunner
 from app.segmentation import DEFAULT_CONFIG, SegmentationRunner
 from app.storage import JobStore, clear_directory, safe_remove_path, save_upload_file
 
@@ -30,11 +31,17 @@ app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
 templates = Jinja2Templates(directory=os.path.join(BASE_DIR, "templates"))
 store = JobStore()
 runner = SegmentationRunner(OUTPUT_DIR)
+ocr_runner = MinerURunner(OUTPUT_DIR)
 active_yolo_model = {"filename": None, "path": None}
 
 
 class RunRequest(BaseModel):
     image_ids: Optional[List[str]] = None
+    config: Optional[Dict[str, Any]] = None
+
+
+class OcrRequest(BaseModel):
+    source_filename: Optional[str] = None
     config: Optional[Dict[str, Any]] = None
 
 
@@ -86,6 +93,49 @@ async def _save_or_reuse_yolo_model(file: UploadFile):
 def _delete_image_files(item: Dict[str, Any]):
     safe_remove_path(item.get("path"))
     safe_remove_path(os.path.join(OUTPUT_DIR, item.get("id", "")))
+
+
+def _safe_output_path(image_id: str, file_path: str):
+    safe_path = os.path.normpath(file_path or "").lstrip(os.sep)
+    if not safe_path or safe_path.startswith(".."):
+        raise HTTPException(status_code=400, detail="Tên file kết quả không hợp lệ")
+
+    base_dir = os.path.abspath(os.path.join(OUTPUT_DIR, image_id))
+    path = os.path.abspath(os.path.join(base_dir, safe_path))
+    if not path.startswith(base_dir + os.sep):
+        raise HTTPException(status_code=400, detail="Tên file kết quả không hợp lệ")
+    return path
+
+
+def _pick_ocr_source(item: Dict[str, Any], source_filename: Optional[str] = None):
+    if source_filename:
+        path = _safe_output_path(item["id"], source_filename)
+        if not os.path.isfile(path):
+            raise HTTPException(status_code=404, detail="Không tìm thấy ảnh kết quả để OCR")
+        return path, source_filename
+
+    candidates = [
+        result
+        for result in item.get("results", [])
+        if (result.get("type") in {None, "image"}) and result.get("filename")
+    ]
+    if not candidates:
+        raise HTTPException(status_code=400, detail="Chưa có ảnh kết quả để OCR")
+
+    preferred_steps = ("enhance_adaptive", "yolo_enhance_adaptive", "enhance_otsu", "yolo_enhance_otsu")
+    for step_name in preferred_steps:
+        for result in reversed(candidates):
+            if result.get("step") == step_name:
+                path = _safe_output_path(item["id"], result["filename"])
+                if os.path.isfile(path):
+                    return path, result["filename"]
+
+    for result in reversed(candidates):
+        path = _safe_output_path(item["id"], result["filename"])
+        if os.path.isfile(path):
+            return path, result["filename"]
+
+    raise HTTPException(status_code=404, detail="Không tìm thấy ảnh kết quả để OCR")
 
 
 _load_existing_yolo_model()
@@ -232,16 +282,50 @@ async def get_results(image_id: str):
         "error": item["error"],
         "original_url": item.get("original_url"),
         "results": item.get("results", []),
+        "ocr_results": item.get("ocr_results", []),
     }
 
 
-@app.get("/api/download/{image_id}/{filename}")
-async def download_result(image_id: str, filename: str):
-    safe_name = os.path.basename(filename)
-    path = os.path.join(OUTPUT_DIR, image_id, safe_name)
-    if not os.path.exists(path):
+@app.post("/api/ocr/{image_id}")
+async def run_ocr(image_id: str, payload: OcrRequest):
+    if store.is_processing:
+        raise HTTPException(status_code=409, detail="Pipeline đang chạy, vui lòng đợi xử lý xong rồi OCR")
+
+    item = store.get(image_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="Không tìm thấy ảnh")
+    if item.get("status") != "done":
+        raise HTTPException(status_code=400, detail="Chỉ OCR sau khi scan xử lý xong")
+
+    source_path, source_filename = _pick_ocr_source(item, payload.source_filename)
+    config = payload.config or DEFAULT_CONFIG
+    try:
+        ocr_results = await asyncio.to_thread(
+            ocr_runner.process_result_image,
+            image_id,
+            source_path,
+            config,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    item["ocr_results"] = ocr_results
+    item["ocr_source"] = source_filename
+    return {
+        "message": "Đã OCR bằng MinerU",
+        "source_filename": source_filename,
+        "ocr_results": ocr_results,
+    }
+
+
+@app.get("/api/download/{image_id}/{file_path:path}")
+async def download_result(image_id: str, file_path: str):
+    path = _safe_output_path(image_id, file_path)
+    if not os.path.isfile(path):
         raise HTTPException(status_code=404, detail="Không tìm thấy file kết quả")
-    return FileResponse(path, filename=safe_name, media_type="image/png")
+
+    media_type = mimetypes.guess_type(path)[0] or "application/octet-stream"
+    return FileResponse(path, filename=os.path.basename(path), media_type=media_type)
 
 
 @app.delete("/api/clear")

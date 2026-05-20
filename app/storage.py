@@ -23,6 +23,8 @@ class JobStore:
             "progress": 0,
             "created_at": datetime.now().isoformat(timespec="seconds"),
             "results": [],
+            "ocr_results": [],
+            "ocr_source": None,
             "error": None,
         }
         self.images[image_id] = item
@@ -48,6 +50,8 @@ class JobStore:
                 image["status"] = "queued"
                 image["progress"] = 0
                 image["results"] = []
+                image["ocr_results"] = []
+                image["ocr_source"] = None
                 image["error"] = None
                 self.queue.append(image_id)
 

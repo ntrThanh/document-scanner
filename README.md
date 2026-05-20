@@ -1,125 +1,194 @@
+---
+license: mit
+language:
+  - vi
+  - en
+tags:
+  - computer-vision
+  - document-segmentation
+  - document-scanner
+  - ocr
+  - fastapi
+  - opencv
+  - yolo
+  - mineru
+pipeline_tag: image-segmentation
+---
+
 # Document Segmentation FastAPI
 
-Ứng dụng web demo phân đoạn tài liệu bằng **FastAPI + OpenCV** và có thêm chế độ **YOLO segmentation**. Pipeline gốc vẫn được giữ nguyên để có thể bật/tắt từng bước và chỉnh tham số trực tiếp trên giao diện.
+<p align="center">
+  <a href="https://www.python.org/"><img alt="Python" src="https://img.shields.io/badge/Python-3.10%2B-3776AB?style=flat-square&logo=python&logoColor=white"></a>
+  <a href="https://fastapi.tiangolo.com/"><img alt="FastAPI" src="https://img.shields.io/badge/FastAPI-0.115%2B-009688?style=flat-square&logo=fastapi&logoColor=white"></a>
+  <a href="https://opencv.org/"><img alt="OpenCV" src="https://img.shields.io/badge/OpenCV-4.10%2B-5C3EE8?style=flat-square&logo=opencv&logoColor=white"></a>
+  <a href="https://github.com/ultralytics/ultralytics"><img alt="YOLO" src="https://img.shields.io/badge/YOLO-Segmentation-111827?style=flat-square"></a>
+  <a href="LICENSE"><img alt="License" src="https://img.shields.io/badge/License-MIT-16A34A?style=flat-square"></a>
+</p>
 
-![Scan app](https://raw.githubusercontent.com/ntrThanh/document-scanner/refs/heads/master/static/assets/Example.png)
+<p align="center">
+  <b>Web app for document segmentation, perspective correction, scan enhancement, and OCR.</b>
+</p>
 
-## Chức năng chính
+<p align="center">
+  <img src="static/assets/image.png" alt="Document Segmentation FastAPI interface preview" width="860">
+</p>
 
-- Upload một hoặc nhiều ảnh.
-- Chọn 1 trong 2 chế độ xử lý:
-  - **Pipeline gốc OpenCV**: Gaussian, Median, Sharpen, cân bằng sáng, phát hiện biên, morphology, contour, phát hiện góc, perspective transform, enhancement.
-  - **YOLO Segment**: upload file `.pt`, chạy YOLO segmentation, lấy mask/contour, phát hiện 4 góc, chuyển đổi góc nhìn, tăng cường ảnh.
-- Giao diện responsive, dùng được trên máy tính và điện thoại.
-- Xem hàng chờ xử lý, tiến trình, ảnh gốc, ảnh cuối và ảnh trung gian.
-- Tải xuống từng ảnh kết quả.
+<p align="center">
+  <sub>FastAPI + OpenCV + YOLO Segmentation + MinerU OCR</sub>
+</p>
 
-## Cấu trúc project
+## Overview
+
+Document Segmentation FastAPI is a web-based document scanning demo. It detects the document region from uploaded images, estimates or accepts four document corners, applies perspective correction, enhances the final scan, and optionally runs OCR on the processed result.
+
+The project is designed for computer vision coursework, document scanner prototyping, YOLO segmentation experiments, and OCR post-processing workflows.
+
+## Highlights
+
+- Multiple processing modes: OpenCV pipeline, YOLO segmentation, Hough Transform, and Manual Contour.
+- Batch image upload with queue status, progress tracking, intermediate outputs, and final scan preview.
+- Configurable preprocessing, edge detection, morphology, contour filtering, corner detection, and enhancement parameters.
+- YOLO `.pt` upload and reuse for document segmentation masks.
+- Manual four-corner selection for difficult images.
+- MinerU OCR on the final scanned image, with Markdown, JSON, PDF, and visual output links when available.
+- Responsive HTML/CSS/JavaScript interface for desktop and mobile.
+
+## Tech Stack
+
+| Layer | Stack |
+| --- | --- |
+| Backend | FastAPI, Uvicorn, Pydantic |
+| Computer Vision | OpenCV, NumPy |
+| Segmentation | Ultralytics YOLO |
+| OCR | MinerU |
+| Frontend | HTML, CSS, JavaScript |
+| Storage | Local filesystem: `uploads/`, `outputs/`, `models/` |
+
+## Processing Modes
+
+| Mode | Description | Best For |
+| --- | --- | --- |
+| OpenCV Pipeline | Traditional preprocessing, edge detection, morphology, contour detection, and perspective transform. | Clear document boundaries and parameter tuning. |
+| YOLO Segmentation | Uses a trained YOLO segmentation model to extract a document mask before scanning. | Complex backgrounds or trained production-like segmentation. |
+| Hough Transform | Detects document boundary lines with HoughLinesP and reconstructs the main contour. | Documents with strong straight edges. |
+| Manual Contour | Lets the user click four document corners manually. | Hard cases where automatic detection fails. |
+
+## Pipeline
 
 ```text
-document_segmentation_fastapi/
-├── app/
-│   ├── __init__.py
-│   ├── segmentation.py
-│   └── storage.py
-├── static/
-│   ├── style.css
-│   └── script.js
-├── templates/
-│   └── index.html
-├── uploads/
-├── outputs/
-├── models/
-├── main.py
-├── requirements.txt
-└── README.md
+Upload image
+  -> Select processor: OpenCV / YOLO / Hough / Manual
+  -> Detect document region
+  -> Estimate or receive 4 corners
+  -> Perspective transform
+  -> Image enhancement
+  -> Final scanned output
+  -> Optional MinerU OCR
 ```
 
-## Cài đặt
+## Quickstart
+
+Create and activate a virtual environment:
 
 ```bash
 python -m venv .venv
 source .venv/bin/activate
+```
+
+Install dependencies:
+
+```bash
 pip install -r requirements.txt
 ```
 
-Nếu chỉ chạy pipeline OpenCV thì không cần model YOLO. Nếu chạy YOLO, cần có file model `.pt` đã train cho bài toán segmentation tài liệu.
-
-## Chạy ứng dụng
+Run the application:
 
 ```bash
 uvicorn main:app --reload
 ```
 
-Mở trình duyệt:
+Open:
 
 ```text
 http://127.0.0.1:8000
 ```
 
-## Cách dùng trên giao diện
+Optional MinerU OCR installation:
 
-### 1. Pipeline gốc
+```bash
+uv pip install -U "mineru[all]"
+```
 
-1. Upload ảnh.
-2. Chọn **Pipeline gốc**.
-3. Chỉnh kiểu ảnh, phương pháp cân bằng sáng, phát hiện biên, morphology.
-4. Bật/tắt các bước xử lý nếu cần.
-5. Mở phần **Tham số pipeline gốc** để chỉnh Canny, Sobel, CLAHE, kernel, alpha/beta...
-6. Bấm **Chạy xử lý**.
+## Usage
 
-### 2. YOLO Segment
+### OpenCV Pipeline
 
-1. Upload ảnh.
-2. Chọn **YOLO Segment**.
-3. Upload file model `.pt`.
-4. Chỉnh `YOLO confidence` và `Mask threshold` nếu cần.
-5. Bấm **Chạy xử lý**.
+1. Upload one or more document images.
+2. Select `Pipeline gốc`.
+3. Adjust image mode, illumination correction, edge detection, morphology, and detailed parameters if needed.
+4. Enable or disable pipeline steps.
+5. Click `Chạy xử lý`.
 
-Luồng YOLO:
+### YOLO Segmentation
+
+1. Upload one or more document images.
+2. Select `YOLO Segment`.
+3. Upload a trained YOLO `.pt` segmentation model.
+4. Tune `YOLO confidence` and `Mask threshold`.
+5. Click `Chạy xử lý`.
+
+YOLO flow:
 
 ```text
-Ảnh gốc
-→ YOLO mask
-→ lấy contour lớn nhất
-→ phát hiện 4 góc
-→ perspective transform
-→ tăng cường ảnh
+Original image -> YOLO mask -> largest contour -> 4 corners -> perspective transform -> enhancement
 ```
 
-Nếu model YOLO trả về mask, hệ thống dùng mask để tìm contour. Nếu không có mask nhưng có box, hệ thống fallback sang box lớn nhất để ước lượng vùng tài liệu.
+If YOLO returns masks, the app uses the mask to find the document contour. If only boxes are available, it falls back to the largest box.
 
-## API
+### Hough Transform
 
-### Upload ảnh
+1. Upload a document image.
+2. Select `Hough Transform`.
+3. Tune Canny, Hough threshold, minimum line length, maximum line gap, and morphology settings.
+4. Click `Chạy xử lý`.
 
-```http
-POST /api/upload
+### Manual Contour
+
+1. Upload a document image.
+2. Select `Manual Contour`.
+3. Click `Chọn góc` and select four document corners on the preview.
+4. Adjust enhancement if needed.
+5. Click `Chạy xử lý`.
+
+### MinerU OCR
+
+1. Run any scan pipeline first.
+2. In the result card, click `OCR` next to the final image.
+3. The server runs MinerU on the scanned output.
+4. View Markdown preview and download generated OCR artifacts.
+
+OCR results are stored in:
+
+```text
+outputs/<image_id>/ocr/
 ```
 
-Body dạng `multipart/form-data`, key là `files`.
+## API Reference
 
-### Upload model YOLO
+| Method | Endpoint | Description |
+| --- | --- | --- |
+| `POST` | `/api/upload` | Upload one or more images with form key `files`. |
+| `POST` | `/api/model/upload` | Upload a YOLO `.pt` model with form key `file`. |
+| `GET` | `/api/model/status` | Check the active YOLO model. |
+| `POST` | `/api/run` | Run the selected document processing pipeline. |
+| `POST` | `/api/ocr/{image_id}` | Run MinerU OCR on a processed result image. |
+| `GET` | `/api/status` | Get queue and processing status. |
+| `GET` | `/api/results/{image_id}` | Get outputs for one image. |
+| `GET` | `/api/download/{image_id}/{file_path}` | Download an output artifact. |
+| `DELETE` | `/api/clear` | Clear uploaded images and generated outputs. |
+| `DELETE` | `/api/cache` | Alias for clearing cache. |
 
-```http
-POST /api/model/upload
-```
-
-Body dạng `multipart/form-data`, key là `file`, chỉ nhận `.pt`.
-
-### Kiểm tra model YOLO hiện tại
-
-```http
-GET /api/model/status
-```
-
-### Chạy xử lý
-
-```http
-POST /api/run
-```
-
-Ví dụ chạy pipeline gốc:
+Example OpenCV request:
 
 ```json
 {
@@ -162,7 +231,7 @@ Ví dụ chạy pipeline gốc:
 }
 ```
 
-Ví dụ chạy YOLO:
+Example YOLO request:
 
 ```json
 {
@@ -181,36 +250,81 @@ Ví dụ chạy YOLO:
 }
 ```
 
-`model_path` không cần truyền từ frontend vì server tự dùng model `.pt` đã upload gần nhất.
+`model_path` can stay empty because the backend automatically uses the latest uploaded `.pt` model.
 
-### Lấy trạng thái
+Example OCR request:
 
-```http
-GET /api/status
+```json
+{
+  "config": {
+    "mineru": {
+      "method": "ocr",
+      "backend": "pipeline",
+      "lang": "",
+      "formula": true,
+      "table": true,
+      "timeout_seconds": 3600
+    }
+  }
+}
 ```
 
-### Lấy kết quả một ảnh
+## Project Structure
 
-```http
-GET /api/results/{image_id}
+```text
+.
+├── app/
+│   ├── __init__.py
+│   ├── ocr.py
+│   ├── segmentation.py
+│   └── storage.py
+├── static/
+│   ├── assets/
+│   │   ├── Example.png
+│   │   └── image.png
+│   ├── script.js
+│   └── style.css
+├── templates/
+│   └── index.html
+├── main.py
+├── requirements.txt
+├── script.sh
+├── LICENSE
+└── README.md
 ```
 
-### Tải ảnh kết quả
+Runtime directories are created automatically:
 
-```http
-GET /api/download/{image_id}/{filename}
-```
+- `uploads/`: uploaded source images.
+- `outputs/`: processed images and OCR artifacts.
+- `models/`: uploaded YOLO `.pt` models.
 
-### Xóa hàng chờ
+## Configuration Notes
 
-```http
-DELETE /api/clear
-```
+| Parameter | Purpose |
+| --- | --- |
+| `canny_low`, `canny_high` | Canny edge thresholds for the OpenCV pipeline. |
+| `morph_kernel`, `morph_iterations` | Morphology kernel size and iteration count. |
+| `contour_min_area_ratio` | Minimum contour area relative to image size. |
+| `yolo_confidence` | YOLO confidence threshold. |
+| `yolo_mask_threshold` | Binary threshold for YOLO masks. |
+| `enhance_alpha`, `enhance_beta` | Contrast and brightness enhancement. |
+| `timeout_seconds` | MinerU OCR timeout. |
 
-## Ghi chú
+## Limitations
 
-- Kết quả được lưu trong thư mục `outputs/`.
-- Ảnh upload được lưu trong thư mục `uploads/`.
-- Model YOLO upload được lưu trong thư mục `models/`.
-- Pipeline OpenCV phù hợp để demo học thuật và cho phép tinh chỉnh chi tiết.
-- Chế độ YOLO phụ thuộc nhiều vào chất lượng model `.pt`; nên train model YOLO segmentation với nhãn mask/segment tài liệu.
+- YOLO quality depends on the uploaded segmentation model.
+- OCR runtime can be slow for dense documents, formulas, and tables.
+- Uploaded files and generated outputs are stored locally, so long-running deployments should clean cache regularly.
+- This repository is a demo/prototype, not a hardened multi-user production service.
+
+## Roadmap
+
+- Multi-model YOLO management.
+- Batch ZIP export.
+- Dockerfile and docker-compose setup.
+- Automated API and image-processing tests.
+
+## License
+
+Released under the [MIT License](LICENSE).

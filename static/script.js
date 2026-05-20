@@ -15,11 +15,22 @@ const results = document.getElementById("results");
 const stepsBox = document.getElementById("stepsBox");
 const opencvPanel = document.getElementById("opencvPanel");
 const yoloPanel = document.getElementById("yoloPanel");
+const houghPanel = document.getElementById("houghPanel");
+const manualPanel = document.getElementById("manualPanel");
 const modelInput = document.getElementById("modelInput");
 const chooseModelBtn = document.getElementById("chooseModelBtn");
 const modelStatus = document.getElementById("modelStatus");
 const opencvTab = document.getElementById("opencvTab");
 const yoloTab = document.getElementById("yoloTab");
+const houghTab = document.getElementById("houghTab");
+const manualTab = document.getElementById("manualTab");
+const manualImageList = document.getElementById("manualImageList");
+const manualPicker = document.getElementById("manualPicker");
+const manualPickerTitle = document.getElementById("manualPickerTitle");
+const manualStatus = document.getElementById("manualStatus");
+const manualResetBtn = document.getElementById("manualResetBtn");
+const manualImage = document.getElementById("manualImage");
+const manualCanvas = document.getElementById("manualCanvas");
 const imageViewer = document.getElementById("imageViewer");
 const viewerImage = document.getElementById("viewerImage");
 const viewerCanvas = document.getElementById("viewerCanvas");
@@ -28,7 +39,7 @@ const viewerZoomIn = document.getElementById("viewerZoomIn");
 const viewerZoomOut = document.getElementById("viewerZoomOut");
 const viewerZoomReset = document.getElementById("viewerZoomReset");
 
-const CONFIG_STORAGE_KEY = "documentSegmentation:lastConfig:v5";
+const CONFIG_STORAGE_KEY = "documentSegmentation:lastConfig:v8";
 
 let currentFiles = [];
 let statusTimer = null;
@@ -36,6 +47,9 @@ let renderedResults = new Set();
 let isRunning = false;
 let isRefreshingStatus = false;
 let lastRunToken = 0;
+let latestImages = [];
+let manualActiveImageId = null;
+let manualCornersByImage = {};
 
 const stepLabels = {
     gaussian_blur: "Gaussian Blur",
@@ -99,7 +113,29 @@ const defaultConfig = {
         yolo_adaptive_block_size: 31,
         yolo_adaptive_c: 7,
         yolo_show_both_thresholds: false,
-        yolo_warp_source: "preprocessed"
+        yolo_warp_source: "preprocessed",
+        hough_canny_low: 50,
+        hough_canny_high: 150,
+        hough_threshold: 80,
+        hough_min_line_length_ratio: 0.25,
+        hough_max_line_gap: 20,
+        hough_line_thickness: 4,
+        hough_morph_kernel: 9,
+        hough_morph_iterations: 2,
+        hough_gaussian_ksize: 3,
+        hough_median_ksize: 3,
+        hough_sharpen_amount: 1.0,
+        hough_enhance_method: "otsu",
+        hough_otsu_blur_ksize: 3,
+        hough_adaptive_block_size: 31,
+        hough_adaptive_c: 7,
+        hough_show_both_thresholds: false,
+        hough_warp_source: "preprocessed",
+        manual_enhance_method: "otsu",
+        manual_otsu_blur_ksize: 3,
+        manual_adaptive_block_size: 31,
+        manual_adaptive_c: 7,
+        manual_show_both_thresholds: false
     },
     yolo_steps: {
         gaussian_blur: false,
@@ -108,7 +144,29 @@ const defaultConfig = {
         illumination: false,
         enhance: true
     },
-    yolo: {model_path: ""}
+    hough_steps: {
+        gaussian_blur: true,
+        median_blur: true,
+        sharpen: false,
+        illumination: true,
+        morphology: true,
+        enhance: true
+    },
+    manual_steps: {
+        enhance: true
+    },
+    manual: {
+        corners_by_image: {}
+    },
+    yolo: {model_path: ""},
+    mineru: {
+        method: "ocr",
+        backend: "pipeline",
+        lang: "",
+        formula: true,
+        table: true,
+        timeout_seconds: 3600
+    }
 };
 
 function deepMerge(base, update) {
@@ -171,10 +229,16 @@ function setProcessor(processor) {
     if (input) input.checked = true;
 
     const isYolo = processor === "yolo";
-    opencvPanel?.classList.toggle("hidden", isYolo);
+    const isHough = processor === "hough";
+    const isManual = processor === "manual";
+    opencvPanel?.classList.toggle("hidden", isYolo || isHough || isManual);
     yoloPanel?.classList.toggle("hidden", !isYolo);
-    opencvTab?.classList.toggle("active", !isYolo);
+    houghPanel?.classList.toggle("hidden", !isHough);
+    manualPanel?.classList.toggle("hidden", !isManual);
+    opencvTab?.classList.toggle("active", !isYolo && !isHough && !isManual);
     yoloTab?.classList.toggle("active", isYolo);
+    houghTab?.classList.toggle("active", isHough);
+    manualTab?.classList.toggle("active", isManual);
 }
 
 function initSteps() {
@@ -232,6 +296,30 @@ function applyConfigToForm(config = defaultConfig) {
     setElementValue("yoloAdaptiveC", params.yolo_adaptive_c ?? defaultConfig.params.yolo_adaptive_c);
     setElementValue("yoloShowBothThresholds", String(params.yolo_show_both_thresholds ?? defaultConfig.params.yolo_show_both_thresholds));
     setElementValue("yoloWarpSource", params.yolo_warp_source ?? defaultConfig.params.yolo_warp_source);
+    setElementValue("houghCannyLow", params.hough_canny_low ?? defaultConfig.params.hough_canny_low);
+    setElementValue("houghCannyHigh", params.hough_canny_high ?? defaultConfig.params.hough_canny_high);
+    setElementValue("houghThreshold", params.hough_threshold ?? defaultConfig.params.hough_threshold);
+    setElementValue("houghMinLineLengthRatio", params.hough_min_line_length_ratio ?? defaultConfig.params.hough_min_line_length_ratio);
+    setElementValue("houghMaxLineGap", params.hough_max_line_gap ?? defaultConfig.params.hough_max_line_gap);
+    setElementValue("houghLineThickness", params.hough_line_thickness ?? defaultConfig.params.hough_line_thickness);
+    setElementValue("houghMorphKernel", params.hough_morph_kernel ?? defaultConfig.params.hough_morph_kernel);
+    setElementValue("houghMorphIterations", params.hough_morph_iterations ?? defaultConfig.params.hough_morph_iterations);
+    setElementValue("houghGaussianKsize", params.hough_gaussian_ksize ?? defaultConfig.params.hough_gaussian_ksize);
+    setElementValue("houghMedianKsize", params.hough_median_ksize ?? defaultConfig.params.hough_median_ksize);
+    setElementValue("houghSharpenAmount", params.hough_sharpen_amount ?? defaultConfig.params.hough_sharpen_amount);
+    setElementValue("houghIlluminationMethod", config.illumination_method || defaultConfig.illumination_method);
+    setElementValue("houghEnhanceMethod", params.hough_enhance_method ?? defaultConfig.params.hough_enhance_method);
+    setElementValue("houghOtsuBlurKsize", params.hough_otsu_blur_ksize ?? defaultConfig.params.hough_otsu_blur_ksize);
+    setElementValue("houghAdaptiveBlockSize", params.hough_adaptive_block_size ?? defaultConfig.params.hough_adaptive_block_size);
+    setElementValue("houghAdaptiveC", params.hough_adaptive_c ?? defaultConfig.params.hough_adaptive_c);
+    setElementValue("houghShowBothThresholds", String(params.hough_show_both_thresholds ?? defaultConfig.params.hough_show_both_thresholds));
+    setElementValue("houghWarpSource", params.hough_warp_source ?? defaultConfig.params.hough_warp_source);
+    setElementValue("manualEnhanceMethod", params.manual_enhance_method ?? defaultConfig.params.manual_enhance_method);
+    setElementValue("manualOtsuBlurKsize", params.manual_otsu_blur_ksize ?? defaultConfig.params.manual_otsu_blur_ksize);
+    setElementValue("manualAdaptiveBlockSize", params.manual_adaptive_block_size ?? defaultConfig.params.manual_adaptive_block_size);
+    setElementValue("manualAdaptiveC", params.manual_adaptive_c ?? defaultConfig.params.manual_adaptive_c);
+    setElementValue("manualShowBothThresholds", String(params.manual_show_both_thresholds ?? defaultConfig.params.manual_show_both_thresholds));
+    setElementValue("manualEnhanceEnabled", String((config.manual_steps || defaultConfig.manual_steps).enhance));
 
     document.querySelectorAll("[data-step]").forEach(input => {
         input.checked = Boolean((config.steps || defaultConfig.steps)[input.dataset.step]);
@@ -239,6 +327,10 @@ function applyConfigToForm(config = defaultConfig) {
 
     document.querySelectorAll("[data-yolo-step]").forEach(input => {
         input.checked = Boolean((config.yolo_steps || defaultConfig.yolo_steps)[input.dataset.yoloStep]);
+    });
+
+    document.querySelectorAll("[data-hough-step]").forEach(input => {
+        input.checked = Boolean((config.hough_steps || defaultConfig.hough_steps)[input.dataset.houghStep]);
     });
 }
 
@@ -259,6 +351,15 @@ function buildConfig() {
     document.querySelectorAll("[data-yolo-step]").forEach(input => {
         yoloSteps[input.dataset.yoloStep] = input.checked;
     });
+
+    const houghSteps = {};
+    document.querySelectorAll("[data-hough-step]").forEach(input => {
+        houghSteps[input.dataset.houghStep] = input.checked;
+    });
+
+    const manualSteps = {
+        enhance: getElementValue("manualEnhanceEnabled", String(defaultConfig.manual_steps.enhance)) === "true"
+    };
 
     const params = {
         gaussian_ksize: getNumberValue("gaussianKsize", defaultConfig.params.gaussian_ksize),
@@ -290,7 +391,29 @@ function buildConfig() {
         yolo_adaptive_block_size: getNumberValue("yoloAdaptiveBlockSize", defaultConfig.params.yolo_adaptive_block_size),
         yolo_adaptive_c: getNumberValue("yoloAdaptiveC", defaultConfig.params.yolo_adaptive_c),
         yolo_show_both_thresholds: getElementValue("yoloShowBothThresholds", String(defaultConfig.params.yolo_show_both_thresholds)) === "true",
-        yolo_warp_source: getElementValue("yoloWarpSource", defaultConfig.params.yolo_warp_source)
+        yolo_warp_source: getElementValue("yoloWarpSource", defaultConfig.params.yolo_warp_source),
+        hough_canny_low: getNumberValue("houghCannyLow", defaultConfig.params.hough_canny_low),
+        hough_canny_high: getNumberValue("houghCannyHigh", defaultConfig.params.hough_canny_high),
+        hough_threshold: getNumberValue("houghThreshold", defaultConfig.params.hough_threshold),
+        hough_min_line_length_ratio: getNumberValue("houghMinLineLengthRatio", defaultConfig.params.hough_min_line_length_ratio),
+        hough_max_line_gap: getNumberValue("houghMaxLineGap", defaultConfig.params.hough_max_line_gap),
+        hough_line_thickness: getNumberValue("houghLineThickness", defaultConfig.params.hough_line_thickness),
+        hough_morph_kernel: getNumberValue("houghMorphKernel", defaultConfig.params.hough_morph_kernel),
+        hough_morph_iterations: getNumberValue("houghMorphIterations", defaultConfig.params.hough_morph_iterations),
+        hough_gaussian_ksize: getNumberValue("houghGaussianKsize", defaultConfig.params.hough_gaussian_ksize),
+        hough_median_ksize: getNumberValue("houghMedianKsize", defaultConfig.params.hough_median_ksize),
+        hough_sharpen_amount: getNumberValue("houghSharpenAmount", defaultConfig.params.hough_sharpen_amount),
+        hough_enhance_method: getElementValue("houghEnhanceMethod", defaultConfig.params.hough_enhance_method),
+        hough_otsu_blur_ksize: getNumberValue("houghOtsuBlurKsize", defaultConfig.params.hough_otsu_blur_ksize),
+        hough_adaptive_block_size: getNumberValue("houghAdaptiveBlockSize", defaultConfig.params.hough_adaptive_block_size),
+        hough_adaptive_c: getNumberValue("houghAdaptiveC", defaultConfig.params.hough_adaptive_c),
+        hough_show_both_thresholds: getElementValue("houghShowBothThresholds", String(defaultConfig.params.hough_show_both_thresholds)) === "true",
+        hough_warp_source: getElementValue("houghWarpSource", defaultConfig.params.hough_warp_source),
+        manual_enhance_method: getElementValue("manualEnhanceMethod", defaultConfig.params.manual_enhance_method),
+        manual_otsu_blur_ksize: getNumberValue("manualOtsuBlurKsize", defaultConfig.params.manual_otsu_blur_ksize),
+        manual_adaptive_block_size: getNumberValue("manualAdaptiveBlockSize", defaultConfig.params.manual_adaptive_block_size),
+        manual_adaptive_c: getNumberValue("manualAdaptiveC", defaultConfig.params.manual_adaptive_c),
+        manual_show_both_thresholds: getElementValue("manualShowBothThresholds", String(defaultConfig.params.manual_show_both_thresholds)) === "true"
     };
 
     return {
@@ -298,14 +421,20 @@ function buildConfig() {
         mode: getElementValue("mode", defaultConfig.mode),
         illumination_method: processor === "yolo"
             ? getElementValue("yoloIlluminationMethod", defaultConfig.illumination_method)
+            : processor === "hough"
+            ? getElementValue("houghIlluminationMethod", defaultConfig.illumination_method)
             : getElementValue("illuminationMethod", defaultConfig.illumination_method),
         gray_equalization_method: getElementValue("grayEqualizationMethod", defaultConfig.gray_equalization_method),
         edge_method: getElementValue("edgeMethod", defaultConfig.edge_method),
         morph_operation: getElementValue("morphOperation", defaultConfig.morph_operation),
         steps,
         yolo_steps: yoloSteps,
+        hough_steps: houghSteps,
+        manual_steps: manualSteps,
         params,
-        yolo: {model_path: ""}
+        yolo: {model_path: ""},
+        manual: {corners_by_image: manualCornersByImage},
+        mineru: {...defaultConfig.mineru}
     };
 }
 
@@ -378,6 +507,12 @@ function withCacheBuster(url) {
     if (!url) return "";
     const separator = url.includes("?") ? "&" : "?";
     return `${url}${separator}t=${Date.now()}`;
+}
+
+function isImageResult(item) {
+    if (!item) return false;
+    if (item.type === "image") return true;
+    return /\.(png|jpe?g|webp|bmp|tiff?)$/i.test(item.url || item.filename || "");
 }
 
 function cssEscape(value) {
@@ -467,6 +602,14 @@ runBtn?.addEventListener("click", async () => {
     if (isRunning) return;
 
     try {
+        if (getProcessor() === "manual") {
+            const missing = latestImages.filter(image => (manualCornersByImage[image.id] || []).length !== 4);
+            if (missing.length) {
+                alert(`Bạn cần chọn đủ 4 góc cho: ${missing.map(image => image.filename).join(", ")}`);
+                return;
+            }
+        }
+
         stopPolling();
         setRunningState(true);
         renderedResults.clear();
@@ -493,6 +636,10 @@ clearBtn?.addEventListener("click", async () => {
         const data = await fetchJson("/api/clear", {method: "DELETE"});
         queueList.innerHTML = "";
         queueSummary.textContent = "Chưa có ảnh";
+        latestImages = [];
+        manualCornersByImage = {};
+        closeManualPicker();
+        renderManualImageList([]);
         resetResultsView();
         selectedFiles.innerHTML = data.kept_yolo_model ? "Đã xóa cache ảnh/kết quả. Model YOLO vẫn được giữ." : "Đã xóa cache ảnh/kết quả.";
         setRunningState(false);
@@ -525,8 +672,10 @@ async function refreshStatus(options = {}) {
     try {
         const data = await fetchJson("/api/status");
         const images = Array.isArray(data.images) ? data.images : [];
+        latestImages = images;
 
         renderQueue(images);
+        renderManualImageList(images);
 
         if (renderDone) {
             const finishedImages = images.filter(image => image.status === "done" || image.status === "error");
@@ -578,6 +727,129 @@ function renderQueue(images) {
         `;
     }).join("");
 }
+
+function renderManualImageList(images) {
+    if (!manualImageList) return;
+
+    if (!images.length) {
+        manualImageList.innerHTML = "<div class='muted'>Upload ảnh trước khi chọn contour thủ công</div>";
+        closeManualPicker();
+        return;
+    }
+
+    manualImageList.innerHTML = images.map(image => {
+        const count = (manualCornersByImage[image.id] || []).length;
+        return `
+            <div class="manual-image-item">
+                <div>
+                    <strong>${escapeHtml(image.filename)}</strong>
+                    <span class="muted">${count}/4 góc đã chọn</span>
+                </div>
+                <button class="secondary manual-select-btn" type="button" data-image-id="${escapeHtml(image.id)}">Chọn góc</button>
+            </div>
+        `;
+    }).join("");
+}
+
+function closeManualPicker() {
+    manualActiveImageId = null;
+    manualPicker?.classList.add("hidden");
+    if (manualImage) manualImage.src = "";
+    drawManualCanvas();
+}
+
+function openManualPicker(imageId) {
+    const image = latestImages.find(item => item.id === imageId);
+    if (!image || !image.original_url || !manualImage) return;
+
+    manualActiveImageId = imageId;
+    manualPicker?.classList.remove("hidden");
+    if (manualPickerTitle) manualPickerTitle.textContent = image.filename;
+    manualImage.src = withCacheBuster(image.original_url);
+    manualImage.onload = drawManualCanvas;
+    updateManualStatus();
+}
+
+function getManualCanvasSize() {
+    if (!manualImage || !manualCanvas) return {width: 0, height: 0};
+    const rect = manualImage.getBoundingClientRect();
+    return {width: Math.max(1, Math.round(rect.width)), height: Math.max(1, Math.round(rect.height))};
+}
+
+function drawManualCanvas() {
+    if (!manualCanvas || !manualImage) return;
+
+    const {width, height} = getManualCanvasSize();
+    manualCanvas.width = width;
+    manualCanvas.height = height;
+    const ctx = manualCanvas.getContext("2d");
+    ctx.clearRect(0, 0, width, height);
+
+    const points = manualCornersByImage[manualActiveImageId] || [];
+    if (!points.length) return;
+
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = "#22c55e";
+    ctx.fillStyle = "rgba(34, 197, 94, 0.18)";
+    ctx.beginPath();
+    points.forEach((point, index) => {
+        const x = point.x * width;
+        const y = point.y * height;
+        if (index === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+    });
+    if (points.length === 4) ctx.closePath();
+    ctx.stroke();
+    if (points.length === 4) ctx.fill();
+
+    points.forEach((point, index) => {
+        const x = point.x * width;
+        const y = point.y * height;
+        ctx.beginPath();
+        ctx.arc(x, y, 8, 0, Math.PI * 2);
+        ctx.fillStyle = "#ef4444";
+        ctx.fill();
+        ctx.fillStyle = "white";
+        ctx.font = "700 12px Arial";
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.fillText(String(index + 1), x, y);
+    });
+}
+
+function updateManualStatus() {
+    const count = (manualCornersByImage[manualActiveImageId] || []).length;
+    if (manualStatus) manualStatus.textContent = `${count}/4 góc`;
+    renderManualImageList(latestImages);
+    drawManualCanvas();
+}
+
+manualImageList?.addEventListener("click", event => {
+    const button = event.target.closest(".manual-select-btn");
+    if (!button) return;
+    openManualPicker(button.dataset.imageId);
+});
+
+manualCanvas?.addEventListener("click", event => {
+    if (!manualActiveImageId || !manualCanvas) return;
+    const points = manualCornersByImage[manualActiveImageId] || [];
+    if (points.length >= 4) return;
+
+    const rect = manualCanvas.getBoundingClientRect();
+    const x = Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width));
+    const y = Math.max(0, Math.min(1, (event.clientY - rect.top) / rect.height));
+    manualCornersByImage[manualActiveImageId] = [...points, {x, y}];
+    updateManualStatus();
+});
+
+manualResetBtn?.addEventListener("click", () => {
+    if (!manualActiveImageId) return;
+    manualCornersByImage[manualActiveImageId] = [];
+    updateManualStatus();
+});
+
+window.addEventListener("resize", drawManualCanvas);
+
 async function renderResult(imageId, statusFilename = "") {
     const data = await fetchJson(`/api/results/${encodeURIComponent(imageId)}?t=${Date.now()}`);
     let resultItems = Array.isArray(data.results) ? data.results : [];
@@ -616,6 +888,7 @@ async function renderResult(imageId, statusFilename = "") {
 
     const finalImage = resultItems[resultItems.length - 1];
     const intermediateResults = resultItems.slice(0, -1);
+    const ocrResults = Array.isArray(data.ocr_results) ? data.ocr_results : [];
 
     const intermediateHtml = intermediateResults.map(item => `
         <div class="image-box">
@@ -652,13 +925,76 @@ async function renderResult(imageId, statusFilename = "") {
                 <img class="zoomable-img" src="${withCacheBuster(finalImage.url)}" data-full-src="${withCacheBuster(finalImage.url)}" alt="final" title="Bấm để xem lớn">
                 <h4>Kết quả cuối cùng</h4>
                 ${finalImage.download_url ? `<a href="${finalImage.download_url}">Tải xuống</a>` : ""}
+                <button class="ocr-btn secondary" type="button" data-image-id="${escapeHtml(imageId)}">OCR</button>
             </div>
         </div>
 
         ${stepsHtml}
+        ${renderOcrSection(ocrResults)}
     `;
 
     results.prepend(card);
+}
+
+function renderOcrSection(ocrResults) {
+    if (!ocrResults.length) return "";
+
+    const markdownItem = ocrResults.find(item => item.type === "markdown");
+    const imageItems = ocrResults.filter(isImageResult);
+    const fileItems = ocrResults.filter(item => !isImageResult(item));
+    const markdownHtml = markdownItem
+        ? `
+            <div class="ocr-preview">
+                <div class="ocr-preview-header">
+                    <h4>Markdown OCR</h4>
+                    <a href="${markdownItem.download_url}">Tải Markdown</a>
+                </div>
+                <pre>${escapeHtml(markdownItem.preview || "")}</pre>
+            </div>
+        `
+        : "";
+
+    const filesHtml = fileItems.map(item => `
+        <div class="file-row">
+            <div>
+                <strong>${escapeHtml(item.step || item.filename)}</strong>
+                <span>${escapeHtml(item.filename)}</span>
+            </div>
+            ${item.download_url ? `<a href="${item.download_url}">Tải xuống</a>` : ""}
+        </div>
+    `).join("");
+
+    const imagesHtml = imageItems.map(item => `
+        <div class="image-box">
+            <img class="zoomable-img" src="${withCacheBuster(item.url)}" data-full-src="${withCacheBuster(item.url)}" alt="${escapeHtml(item.step)}" title="Bấm để xem lớn">
+            <h4>${escapeHtml(item.step)}</h4>
+            ${item.download_url ? `<a href="${item.download_url}">Tải xuống</a>` : ""}
+        </div>
+    `).join("");
+
+    return `
+        <section class="ocr-result">
+            <div class="ocr-title">
+                <h4>OCR MinerU</h4>
+                <span class="badge done">done</span>
+            </div>
+
+            ${markdownHtml}
+            ${filesHtml ? `
+            <details class="accordion result-steps" open>
+                <summary>File OCR</summary>
+                <div class="file-list-result">${filesHtml}</div>
+            </details>
+            ` : ""}
+
+            ${imagesHtml ? `
+            <details class="accordion result-steps">
+                <summary>Ảnh/trực quan MinerU</summary>
+                <div class="image-grid">${imagesHtml}</div>
+            </details>
+            ` : ""}
+        </section>
+    `;
 }
 
 
@@ -700,10 +1036,42 @@ function zoomViewer(delta) {
 }
 
 results?.addEventListener("click", event => {
+    const ocrButton = event.target.closest(".ocr-btn");
+    if (ocrButton) {
+        runOcrForResult(ocrButton);
+        return;
+    }
+
     const img = event.target.closest(".zoomable-img");
     if (!img) return;
     openImageViewer(img.dataset.fullSrc || img.src);
 });
+
+async function runOcrForResult(button) {
+    const imageId = button.dataset.imageId;
+    if (!imageId) return;
+
+    button.disabled = true;
+    const oldText = button.textContent;
+    button.textContent = "Đang OCR...";
+
+    try {
+        await fetchJson(`/api/ocr/${encodeURIComponent(imageId)}`, {
+            method: "POST",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({
+                config: {
+                    mineru: defaultConfig.mineru
+                }
+            })
+        });
+        await renderResult(imageId);
+    } catch (error) {
+        alert(error.message || "OCR thất bại");
+        button.disabled = false;
+        button.textContent = oldText;
+    }
+}
 
 viewerClose?.addEventListener("click", closeImageViewer);
 viewerZoomIn?.addEventListener("click", () => zoomViewer(0.25));

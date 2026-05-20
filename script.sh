@@ -1,2 +1,3 @@
-source activate-deeplearning # thay đổi tùy thuộc vào môi trường
-uvicorn main:app --reload
+source activate-deeplearning 
+
+uvicorn main:app --reload --host 0.0.0.0 --port 8888
