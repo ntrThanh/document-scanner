@@ -1,10 +1,12 @@
 import os
 import shutil
 import uuid
+from io import BytesIO
 from datetime import datetime
 from typing import Dict, List, Optional
 
 from fastapi import UploadFile
+from PIL import Image, ImageOps
 
 
 class JobStore:
@@ -100,6 +102,20 @@ async def save_upload_file(upload_dir: str, file: UploadFile):
     disk_name = f"{uuid.uuid4().hex}{ext}"
     path = os.path.join(upload_dir, disk_name)
     content = await file.read()
+
+    try:
+        with Image.open(BytesIO(content)) as img:
+            normalized = ImageOps.exif_transpose(img)
+            save_kwargs = {}
+            if ext in {".jpg", ".jpeg"}:
+                if normalized.mode not in {"RGB", "L"}:
+                    normalized = normalized.convert("RGB")
+                save_kwargs = {"quality": 95}
+            normalized.save(path, **save_kwargs)
+            return safe_name, path
+    except Exception:
+        pass
+
     with open(path, "wb") as f:
         f.write(content)
     return safe_name, path

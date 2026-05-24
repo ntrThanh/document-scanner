@@ -5,6 +5,7 @@
 const fileInput = document.getElementById("fileInput");
 const dropZone = document.getElementById("dropZone");
 const uploadBtn = document.getElementById("uploadBtn");
+const quickScanBtn = document.getElementById("quickScanBtn");
 const runBtn = document.getElementById("runBtn");
 const clearBtn = document.getElementById("clearBtn");
 const defaultBtn = document.getElementById("defaultBtn");
@@ -13,17 +14,23 @@ const queueList = document.getElementById("queueList");
 const queueSummary = document.getElementById("queueSummary");
 const results = document.getElementById("results");
 const stepsBox = document.getElementById("stepsBox");
+const advancedPanel = document.getElementById("advancedPanel");
 const opencvPanel = document.getElementById("opencvPanel");
 const yoloPanel = document.getElementById("yoloPanel");
+const simpleYoloPanel = document.getElementById("simpleYoloPanel");
 const houghPanel = document.getElementById("houghPanel");
 const manualPanel = document.getElementById("manualPanel");
 const modelInput = document.getElementById("modelInput");
 const chooseModelBtn = document.getElementById("chooseModelBtn");
+const simpleChooseModelBtn = document.getElementById("simpleChooseModelBtn");
+const simpleYoloRunBtn = document.getElementById("simpleYoloRunBtn");
 const modelStatus = document.getElementById("modelStatus");
 const opencvTab = document.getElementById("opencvTab");
 const yoloTab = document.getElementById("yoloTab");
+const simpleYoloTab = document.getElementById("simpleYoloTab");
 const houghTab = document.getElementById("houghTab");
 const manualTab = document.getElementById("manualTab");
+const simpleModelStatus = document.getElementById("simpleModelStatus");
 const manualImageList = document.getElementById("manualImageList");
 const manualPicker = document.getElementById("manualPicker");
 const manualPickerTitle = document.getElementById("manualPickerTitle");
@@ -39,7 +46,7 @@ const viewerZoomIn = document.getElementById("viewerZoomIn");
 const viewerZoomOut = document.getElementById("viewerZoomOut");
 const viewerZoomReset = document.getElementById("viewerZoomReset");
 
-const CONFIG_STORAGE_KEY = "documentSegmentation:lastConfig:v8";
+const CONFIG_STORAGE_KEY = "documentSegmentation:lastConfig:v14";
 
 let currentFiles = [];
 let statusTimer = null;
@@ -65,7 +72,7 @@ const stepLabels = {
 };
 
 const defaultConfig = {
-    processor: "opencv",
+    processor: "simple_yolo",
     mode: "color",
     illumination_method: "lab",
     gray_equalization_method: "clahe",
@@ -132,6 +139,8 @@ const defaultConfig = {
         hough_show_both_thresholds: false,
         hough_warp_source: "preprocessed",
         manual_enhance_method: "otsu",
+        manual_gaussian_ksize: 3,
+        manual_median_ksize: 3,
         manual_otsu_blur_ksize: 3,
         manual_adaptive_block_size: 31,
         manual_adaptive_c: 7,
@@ -153,6 +162,8 @@ const defaultConfig = {
         enhance: true
     },
     manual_steps: {
+        gaussian_blur: true,
+        median_blur: true,
         enhance: true
     },
     manual: {
@@ -229,14 +240,18 @@ function setProcessor(processor) {
     if (input) input.checked = true;
 
     const isYolo = processor === "yolo";
+    const isSimpleYolo = processor === "simple_yolo";
     const isHough = processor === "hough";
     const isManual = processor === "manual";
-    opencvPanel?.classList.toggle("hidden", isYolo || isHough || isManual);
+    opencvPanel?.classList.toggle("hidden", isYolo || isSimpleYolo || isHough || isManual);
     yoloPanel?.classList.toggle("hidden", !isYolo);
+    simpleYoloPanel?.classList.toggle("hidden", !isSimpleYolo);
     houghPanel?.classList.toggle("hidden", !isHough);
     manualPanel?.classList.toggle("hidden", !isManual);
-    opencvTab?.classList.toggle("active", !isYolo && !isHough && !isManual);
+    if (advancedPanel && !isSimpleYolo) advancedPanel.open = true;
+    opencvTab?.classList.toggle("active", !isYolo && !isSimpleYolo && !isHough && !isManual);
     yoloTab?.classList.toggle("active", isYolo);
+    simpleYoloTab?.classList.toggle("active", isSimpleYolo);
     houghTab?.classList.toggle("active", isHough);
     manualTab?.classList.toggle("active", isManual);
 }
@@ -315,11 +330,16 @@ function applyConfigToForm(config = defaultConfig) {
     setElementValue("houghShowBothThresholds", String(params.hough_show_both_thresholds ?? defaultConfig.params.hough_show_both_thresholds));
     setElementValue("houghWarpSource", params.hough_warp_source ?? defaultConfig.params.hough_warp_source);
     setElementValue("manualEnhanceMethod", params.manual_enhance_method ?? defaultConfig.params.manual_enhance_method);
+    setElementValue("manualGaussianKsize", params.manual_gaussian_ksize ?? defaultConfig.params.manual_gaussian_ksize);
+    setElementValue("manualMedianKsize", params.manual_median_ksize ?? defaultConfig.params.manual_median_ksize);
     setElementValue("manualOtsuBlurKsize", params.manual_otsu_blur_ksize ?? defaultConfig.params.manual_otsu_blur_ksize);
     setElementValue("manualAdaptiveBlockSize", params.manual_adaptive_block_size ?? defaultConfig.params.manual_adaptive_block_size);
     setElementValue("manualAdaptiveC", params.manual_adaptive_c ?? defaultConfig.params.manual_adaptive_c);
     setElementValue("manualShowBothThresholds", String(params.manual_show_both_thresholds ?? defaultConfig.params.manual_show_both_thresholds));
-    setElementValue("manualEnhanceEnabled", String((config.manual_steps || defaultConfig.manual_steps).enhance));
+    const manualSteps = config.manual_steps || defaultConfig.manual_steps;
+    setElementValue("manualGaussianEnabled", String(manualSteps.gaussian_blur ?? defaultConfig.manual_steps.gaussian_blur));
+    setElementValue("manualMedianEnabled", String(manualSteps.median_blur ?? defaultConfig.manual_steps.median_blur));
+    setElementValue("manualEnhanceEnabled", String(manualSteps.enhance ?? defaultConfig.manual_steps.enhance));
 
     document.querySelectorAll("[data-step]").forEach(input => {
         input.checked = Boolean((config.steps || defaultConfig.steps)[input.dataset.step]);
@@ -358,6 +378,8 @@ function buildConfig() {
     });
 
     const manualSteps = {
+        gaussian_blur: getElementValue("manualGaussianEnabled", String(defaultConfig.manual_steps.gaussian_blur)) === "true",
+        median_blur: getElementValue("manualMedianEnabled", String(defaultConfig.manual_steps.median_blur)) === "true",
         enhance: getElementValue("manualEnhanceEnabled", String(defaultConfig.manual_steps.enhance)) === "true"
     };
 
@@ -410,6 +432,8 @@ function buildConfig() {
         hough_show_both_thresholds: getElementValue("houghShowBothThresholds", String(defaultConfig.params.hough_show_both_thresholds)) === "true",
         hough_warp_source: getElementValue("houghWarpSource", defaultConfig.params.hough_warp_source),
         manual_enhance_method: getElementValue("manualEnhanceMethod", defaultConfig.params.manual_enhance_method),
+        manual_gaussian_ksize: getNumberValue("manualGaussianKsize", defaultConfig.params.manual_gaussian_ksize),
+        manual_median_ksize: getNumberValue("manualMedianKsize", defaultConfig.params.manual_median_ksize),
         manual_otsu_blur_ksize: getNumberValue("manualOtsuBlurKsize", defaultConfig.params.manual_otsu_blur_ksize),
         manual_adaptive_block_size: getNumberValue("manualAdaptiveBlockSize", defaultConfig.params.manual_adaptive_block_size),
         manual_adaptive_c: getNumberValue("manualAdaptiveC", defaultConfig.params.manual_adaptive_c),
@@ -436,6 +460,41 @@ function buildConfig() {
         manual: {corners_by_image: manualCornersByImage},
         mineru: {...defaultConfig.mineru}
     };
+}
+
+function buildSimpleYoloConfig() {
+    const config = buildConfig();
+    return {
+        ...config,
+        processor: "simple_yolo",
+        mode: "color",
+        illumination_method: "lab",
+        params: {
+            ...config.params,
+            yolo_confidence: 0.1,
+            yolo_mask_threshold: 0.5,
+            yolo_gaussian_ksize: 3,
+            yolo_median_ksize: 5,
+            yolo_sharpen_amount: 1.0,
+            yolo_enhance_method: "adaptive",
+            yolo_otsu_blur_ksize: 3,
+            yolo_adaptive_block_size: 31,
+            yolo_adaptive_c: 10,
+            yolo_show_both_thresholds: true,
+            yolo_warp_source: "preprocessed"
+        },
+        yolo_steps: {
+            gaussian_blur: false,
+            median_blur: true,
+            sharpen: false,
+            illumination: false,
+            enhance: true
+        }
+    };
+}
+
+function buildRunConfig() {
+    return getProcessor() === "simple_yolo" ? buildSimpleYoloConfig() : buildConfig();
 }
 
 function updateSelectedFiles(files) {
@@ -554,6 +613,7 @@ dropZone?.addEventListener("drop", event => {
 });
 
 chooseModelBtn?.addEventListener("click", () => modelInput?.click());
+simpleChooseModelBtn?.addEventListener("click", () => modelInput?.click());
 
 modelInput?.addEventListener("change", async () => {
     const file = modelInput.files[0];
@@ -570,65 +630,100 @@ modelInput?.addEventListener("change", async () => {
 
     try {
         modelStatus.textContent = "Đang upload model...";
+        if (simpleModelStatus) simpleModelStatus.textContent = "Đang upload model...";
         const data = await fetchJson("/api/model/upload", {method: "POST", body: formData});
         modelStatus.textContent = data.reused ? `Đang dùng lại: ${data.filename}` : `Đang dùng: ${data.filename}`;
+        if (simpleModelStatus) {
+            simpleModelStatus.textContent = data.reused ? `Đang dùng lại: ${data.filename}` : `Đang dùng: ${data.filename}`;
+        }
     } catch (error) {
         modelStatus.textContent = "Upload model thất bại";
+        if (simpleModelStatus) simpleModelStatus.textContent = "Upload model thất bại";
         alert(error.message || "Upload model thất bại");
     }
 });
 
-uploadBtn?.addEventListener("click", async () => {
+async function uploadSelectedFiles() {
     if (!currentFiles.length) {
         alert("Bạn chưa chọn ảnh");
-        return;
+        return false;
     }
 
     const formData = new FormData();
     currentFiles.forEach(file => formData.append("files", file));
 
+    await fetchJson("/api/upload", {method: "POST", body: formData});
+    currentFiles = [];
+    fileInput.value = "";
+    selectedFiles.innerHTML = "Upload thành công";
+    await refreshStatus({renderDone: false});
+    return true;
+}
+
+async function runSelectedPipeline() {
+    if (isRunning) return;
+
+    if (!latestImages.length) {
+        alert("Bạn cần upload ảnh trước khi scan");
+        return;
+    }
+
+    if (getProcessor() === "manual") {
+        const missing = latestImages.filter(image => (manualCornersByImage[image.id] || []).length !== 4);
+        if (missing.length) {
+            alert(`Bạn cần chọn đủ 4 góc cho: ${missing.map(image => image.filename).join(", ")}`);
+            return;
+        }
+    }
+
+    stopPolling();
+    setRunningState(true);
+    renderedResults.clear();
+    lastRunToken += 1;
+    results.classList.remove("empty-state");
+    results.innerHTML = "";
+
+    await fetchJson("/api/run", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({config: buildRunConfig()})
+    });
+
+    startPolling();
+}
+
+uploadBtn?.addEventListener("click", async () => {
     try {
-        await fetchJson("/api/upload", {method: "POST", body: formData});
-        currentFiles = [];
-        fileInput.value = "";
-        selectedFiles.innerHTML = "Upload thành công";
-        await refreshStatus({renderDone: false});
+        await uploadSelectedFiles();
     } catch (error) {
         alert(error.message || "Upload ảnh thất bại");
     }
 });
 
-runBtn?.addEventListener("click", async () => {
-    if (isRunning) return;
-
+quickScanBtn?.addEventListener("click", async () => {
     try {
-        if (getProcessor() === "manual") {
-            const missing = latestImages.filter(image => (manualCornersByImage[image.id] || []).length !== 4);
-            if (missing.length) {
-                alert(`Bạn cần chọn đủ 4 góc cho: ${missing.map(image => image.filename).join(", ")}`);
-                return;
-            }
+        setProcessor("simple_yolo");
+        if (currentFiles.length) {
+            const uploaded = await uploadSelectedFiles();
+            if (!uploaded) return;
         }
+        await runSelectedPipeline();
+    } catch (error) {
+        setRunningState(false);
+        alert(error.message || "Không thể scan ảnh");
+    }
+});
 
-        stopPolling();
-        setRunningState(true);
-        renderedResults.clear();
-        lastRunToken += 1;
-        results.classList.remove("empty-state");
-        results.innerHTML = "";
-
-        await fetchJson("/api/run", {
-            method: "POST",
-            headers: {"Content-Type": "application/json"},
-            body: JSON.stringify({config: buildConfig()})
-        });
-
-        startPolling();
+runBtn?.addEventListener("click", async () => {
+    try {
+        await runSelectedPipeline();
     } catch (error) {
         setRunningState(false);
         alert(error.message || "Không thể chạy pipeline");
     }
 });
+
+simpleYoloRunBtn?.addEventListener("click", () => runBtn?.click());
 
 clearBtn?.addEventListener("click", async () => {
     try {
@@ -776,6 +871,46 @@ function getManualCanvasSize() {
     return {width: Math.max(1, Math.round(rect.width)), height: Math.max(1, Math.round(rect.height))};
 }
 
+function getManualImageFitRect() {
+    const {width, height} = getManualCanvasSize();
+    const naturalWidth = manualImage?.naturalWidth || width;
+    const naturalHeight = manualImage?.naturalHeight || height;
+    const imageRatio = naturalWidth / Math.max(1, naturalHeight);
+    const canvasRatio = width / Math.max(1, height);
+
+    if (canvasRatio > imageRatio) {
+        const fittedWidth = height * imageRatio;
+        return {left: (width - fittedWidth) / 2, top: 0, width: fittedWidth, height};
+    }
+
+    const fittedHeight = width / imageRatio;
+    return {left: 0, top: (height - fittedHeight) / 2, width, height: fittedHeight};
+}
+
+function manualPointToCanvas(point) {
+    const fit = getManualImageFitRect();
+    const naturalWidth = manualImage?.naturalWidth || 1;
+    const naturalHeight = manualImage?.naturalHeight || 1;
+    const pointX = point.x > 1 ? point.x / naturalWidth : point.x;
+    const pointY = point.y > 1 ? point.y / naturalHeight : point.y;
+    return {
+        x: fit.left + pointX * fit.width,
+        y: fit.top + pointY * fit.height
+    };
+}
+
+function canvasPointToManualPoint(canvasX, canvasY) {
+    const fit = getManualImageFitRect();
+    const naturalWidth = manualImage?.naturalWidth || 1;
+    const naturalHeight = manualImage?.naturalHeight || 1;
+    const normalizedX = Math.max(0, Math.min(1, (canvasX - fit.left) / fit.width));
+    const normalizedY = Math.max(0, Math.min(1, (canvasY - fit.top) / fit.height));
+    return {
+        x: normalizedX * naturalWidth,
+        y: normalizedY * naturalHeight
+    };
+}
+
 function drawManualCanvas() {
     if (!manualCanvas || !manualImage) return;
 
@@ -793,8 +928,7 @@ function drawManualCanvas() {
     ctx.fillStyle = "rgba(34, 197, 94, 0.18)";
     ctx.beginPath();
     points.forEach((point, index) => {
-        const x = point.x * width;
-        const y = point.y * height;
+        const {x, y} = manualPointToCanvas(point);
         if (index === 0) ctx.moveTo(x, y);
         else ctx.lineTo(x, y);
     });
@@ -803,8 +937,7 @@ function drawManualCanvas() {
     if (points.length === 4) ctx.fill();
 
     points.forEach((point, index) => {
-        const x = point.x * width;
-        const y = point.y * height;
+        const {x, y} = manualPointToCanvas(point);
         ctx.beginPath();
         ctx.arc(x, y, 8, 0, Math.PI * 2);
         ctx.fillStyle = "#ef4444";
@@ -836,9 +969,11 @@ manualCanvas?.addEventListener("click", event => {
     if (points.length >= 4) return;
 
     const rect = manualCanvas.getBoundingClientRect();
-    const x = Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width));
-    const y = Math.max(0, Math.min(1, (event.clientY - rect.top) / rect.height));
-    manualCornersByImage[manualActiveImageId] = [...points, {x, y}];
+    const scaleX = manualCanvas.width / Math.max(1, rect.width);
+    const scaleY = manualCanvas.height / Math.max(1, rect.height);
+    const canvasX = (event.clientX - rect.left) * scaleX;
+    const canvasY = (event.clientY - rect.top) * scaleY;
+    manualCornersByImage[manualActiveImageId] = [...points, canvasPointToManualPoint(canvasX, canvasY)];
     updateManualStatus();
 });
 
@@ -1117,8 +1252,12 @@ async function loadModelStatus() {
     try {
         const data = await fetchJson("/api/model/status");
         modelStatus.textContent = data.has_model ? `Đang dùng: ${data.filename} (không cần upload lại)` : "Chưa có model";
+        if (simpleModelStatus) {
+            simpleModelStatus.textContent = data.has_model ? `Đang dùng: ${data.filename} (không cần upload lại)` : "Chưa có model";
+        }
     } catch (error) {
         modelStatus.textContent = "Không đọc được trạng thái model";
+        if (simpleModelStatus) simpleModelStatus.textContent = "Không đọc được trạng thái model";
         console.error(error);
     }
 }

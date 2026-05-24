@@ -207,7 +207,7 @@ async def run_pipeline(payload: RunRequest, background_tasks: BackgroundTasks):
         raise HTTPException(status_code=400, detail="Chưa có ảnh nào trong hàng chờ")
 
     config = payload.config or DEFAULT_CONFIG
-    if config.get("processor") == "yolo":
+    if config.get("processor") in {"yolo", "simple_yolo"}:
         if not active_yolo_model["path"] or not os.path.exists(active_yolo_model["path"]):
             _load_existing_yolo_model()
         if not active_yolo_model["path"] or not os.path.exists(active_yolo_model["path"]):

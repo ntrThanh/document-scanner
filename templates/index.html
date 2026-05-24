@@ -3,13 +3,13 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Document Segmentation</title>
-    <link rel="stylesheet" href="/static/style.css">
+    <title>Scan tài liệu</title>
+    <link rel="stylesheet" href="/static/style.css?v=14">
 </head>
 <body>
     <header class="hero">
         <div class="hero-content">
-            <h1>Document Segmentation</h1>
+            <h1>Scan tài liệu</h1>
         </div>
     </header>
 
@@ -20,8 +20,8 @@
                     <div class="card-title">
                         <span class="step-index">1</span>
                         <div>
-                            <h2>Chọn ảnh</h2>
-                            <p>Kéo thả hoặc chọn nhiều ảnh cần xử lý.</p>
+                            <h2>Upload ảnh</h2>
+                            <p>Chọn ảnh tài liệu cần scan.</p>
                         </div>
                     </div>
                     <div id="dropZone" class="drop-zone">
@@ -32,7 +32,8 @@
                     </div>
                     <div id="selectedFiles" class="file-list">Chưa chọn ảnh</div>
                     <div class="actions sticky-actions">
-                        <button id="uploadBtn">Upload ảnh</button>
+                        <button id="quickScanBtn">Upload và scan</button>
+                        <button id="uploadBtn" class="secondary">Chỉ upload</button>
                         <button id="clearBtn" class="secondary">Xóa cache</button>
                     </div>
                 </section>
@@ -54,19 +55,48 @@
                     <div class="card-title">
                         <span class="step-index">3</span>
                         <div>
-                            <h2>Chọn cách xử lý</h2>
-                            <p>Pipeline gốc vẫn giữ đầy đủ tham số. YOLO dùng model `.pt`; Hough dùng line transform để dựng biên tài liệu.</p>
+                            <h2>Scan ảnh</h2>
+                            <p>Upload ảnh, bấm scan, xem kết quả ở bên dưới.</p>
                         </div>
                     </div>
 
+                    <div id="simpleYoloPanel" class="config-panel">
+                        <div class="yolo-upload-box quick-scan-box">
+                            <div>
+                                <h3>Scan nhanh bằng YOLO</h3>
+                                <p>Preset sẵn cho tài liệu: phát hiện vùng giấy, cắt phối cảnh và tăng cường bằng Adaptive Threshold.</p>
+                                <div id="simpleModelStatus" class="model-status">Chưa có model</div>
+                            </div>
+                            <button id="simpleChooseModelBtn" class="secondary" type="button">Chọn model .pt</button>
+                        </div>
+                        <div class="preset-strip">
+                            <span>Confidence 0.1</span>
+                            <span>Mask 0.5</span>
+                            <span>Median Blur 5</span>
+                            <span>Adaptive 31 / 10</span>
+                            <span>Xem cả Otsu</span>
+                            <span>Warp ảnh đã làm mịn</span>
+                        </div>
+                        <div class="actions primary-actions">
+                            <button id="simpleYoloRunBtn" type="button">Scan ảnh đã upload</button>
+                        </div>
+                    </div>
+
+                    <details id="advancedPanel" class="advanced-panel">
+                        <summary>Khám phá nâng cao</summary>
+
                     <div class="mode-tabs" role="tablist">
-                        <label class="mode-option active" id="opencvTab">
-                            <input type="radio" name="processor" value="opencv" checked>
-                            <span>Pipeline gốc</span>
+                        <label class="mode-option" id="simpleYoloTab">
+                            <input type="radio" name="processor" value="simple_yolo" checked>
+                            <span>Scan nhanh</span>
                         </label>
                         <label class="mode-option" id="yoloTab">
                             <input type="radio" name="processor" value="yolo">
-                            <span>YOLO Segment</span>
+                            <span>YOLO tùy chỉnh</span>
+                        </label>
+                        <label class="mode-option" id="opencvTab">
+                            <input type="radio" name="processor" value="opencv">
+                            <span>Pipeline gốc</span>
                         </label>
                         <label class="mode-option" id="houghTab">
                             <input type="radio" name="processor" value="hough">
@@ -78,7 +108,7 @@
                         </label>
                     </div>
 
-                    <div id="opencvPanel" class="config-panel">
+                    <div id="opencvPanel" class="config-panel hidden">
                         <div class="settings-grid">
                             <label>Kiểu ảnh
                                 <select id="mode">
@@ -320,6 +350,20 @@
                         <details class="accordion" open>
                             <summary>Tham số Manual Contour</summary>
                             <div class="params-grid">
+                                <label>Manual Gaussian Blur
+                                    <select id="manualGaussianEnabled">
+                                        <option value="true" selected>Có</option>
+                                        <option value="false">Không</option>
+                                    </select>
+                                </label>
+                                <label>Manual Median Blur
+                                    <select id="manualMedianEnabled">
+                                        <option value="true" selected>Có</option>
+                                        <option value="false">Không</option>
+                                    </select>
+                                </label>
+                                <label>Manual Gaussian ksize<input id="manualGaussianKsize" type="number" value="3" min="1" step="2"></label>
+                                <label>Manual Median ksize<input id="manualMedianKsize" type="number" value="3" min="1" step="2"></label>
                                 <label>Tăng cường ảnh Manual
                                     <select id="manualEnhanceMethod">
                                         <option value="contrast">Contrast/CLAHE</option>
@@ -347,9 +391,10 @@
                     </div>
 
                     <div class="actions run-actions">
-                        <button id="runBtn">Chạy xử lý</button>
+                        <button id="runBtn">Chạy luồng đang chọn</button>
                         <button id="defaultBtn" class="secondary">Dùng mặc định</button>
                     </div>
+                    </details>
                 </section>
 
                 <section class="card results-card">
@@ -378,6 +423,6 @@
         </div>
     </div>
 
-    <script src="/static/script.js?v=8"></script>
+    <script src="/static/script.js?v=14"></script>
 </body>
 </html>

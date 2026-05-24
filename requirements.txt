@@ -5,6 +5,7 @@ jinja2==3.1.5
 opencv-python==4.10.0.84
 numpy==2.2.1
 pydantic==2.10.4
+Pillow>=10.0.0
 ultralytics>=8.3.0
 # Optional for the MinerU OCR tab. Install when you need OCR:
 # uv pip install -U "mineru[all]"

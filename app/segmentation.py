@@ -7,7 +7,7 @@ import numpy as np
 
 
 DEFAULT_CONFIG = {
-    "processor": "opencv",
+    "processor": "simple_yolo",
     "mode": "color",
     "illumination_method": "lab",
     "gray_equalization_method": "clahe",
@@ -74,6 +74,8 @@ DEFAULT_CONFIG = {
         "hough_show_both_thresholds": False,
         "hough_warp_source": "preprocessed",
         "manual_enhance_method": "otsu",
+        "manual_gaussian_ksize": 3,
+        "manual_median_ksize": 3,
         "manual_otsu_blur_ksize": 3,
         "manual_adaptive_block_size": 31,
         "manual_adaptive_c": 7,
@@ -98,6 +100,8 @@ DEFAULT_CONFIG = {
         "enhance": True,
     },
     "manual_steps": {
+        "gaussian_blur": True,
+        "median_blur": True,
         "enhance": True,
     },
     "manual": {
@@ -425,6 +429,13 @@ class SegmentationBase:
             vis = cv2.cvtColor(vis, cv2.COLOR_GRAY2BGR)
         if contour is not None:
             cv2.drawContours(vis, [contour], -1, (0, 255, 0), 3)
+        return vis
+
+    def _draw_selected_points(self, image, points):
+        vis = self._draw_contour(image, points.reshape(-1, 1, 2).astype(np.int32))
+        for idx, point in enumerate(points.astype(int)):
+            cv2.circle(vis, tuple(point), 8, (0, 0, 255), -1)
+            cv2.putText(vis, str(idx + 1), tuple(point + 10), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 0, 0), 2)
         return vis
 
     def _draw_corners(self, image, corners):
@@ -796,7 +807,7 @@ class ManualDocumentSegmenter(SegmentationBase):
             return DEFAULT_CONFIG["manual_steps"].get(step_name, False)
         return bool(manual_steps.get(step_name, DEFAULT_CONFIG["manual_steps"].get(step_name, False)))
 
-    def _manual_corners(self, image_id, image_shape):
+    def _manual_points(self, image_id, image_shape):
         corners_by_image = self.config.get("manual", {}).get("corners_by_image", {})
         points = corners_by_image.get(image_id)
         if not points or len(points) != 4:
@@ -811,21 +822,35 @@ class ManualDocumentSegmenter(SegmentationBase):
                 corners.append([x * w, y * h])
             else:
                 corners.append([x, y])
-        return self._order_points(np.array(corners, dtype=np.float32))
+        return np.array(corners, dtype=np.float32)
+
+    def _manual_corners(self, image_id, image_shape):
+        return self._order_points(self._manual_points(image_id, image_shape))
 
     def step_by_step_manual(self, image_id, image):
         original = image.copy()
+        current = original.copy()
         steps, names = [original.copy()], ["original"]
 
-        corners = self._manual_corners(image_id, original.shape)
-        contour = corners.reshape(-1, 1, 2).astype(np.float32)
-        contour_vis = self._draw_contour(original, contour.astype(np.int32))
+        if self._manual_step_enabled("gaussian_blur"):
+            k = self._odd(self._param("manual_gaussian_ksize") or self._param("gaussian_ksize"))
+            current = cv2.GaussianBlur(current, (k, k), 0)
+            self._add(steps, names, current, "manual_gaussian_blur")
+
+        if self._manual_step_enabled("median_blur"):
+            k = self._odd(self._param("manual_median_ksize") or self._param("median_ksize"))
+            current = cv2.medianBlur(current, k)
+            self._add(steps, names, current, "manual_median_blur")
+
+        selected_points = self._manual_points(image_id, original.shape)
+        corners = self._order_points(selected_points)
+        contour_vis = self._draw_selected_points(current, selected_points)
         self._add(steps, names, contour_vis, "manual_contour")
 
-        corners_vis = self._draw_corners(original, corners)
+        corners_vis = self._draw_corners(current, corners)
         self._add(steps, names, corners_vis, "manual_detect_4_corners")
 
-        warped = self._perspective_transform(original, corners)
+        warped = self._perspective_transform(current, corners)
         self._add(steps, names, warped, "perspective_transform")
 
         if self._manual_step_enabled("enhance"):
@@ -850,7 +875,7 @@ class SegmentationRunner:
         image = cv2.imread(image_path)
         if image is None:
             raise ValueError("Không thể đọc ảnh đầu vào")
-        if (config or {}).get("processor") == "yolo":
+        if (config or {}).get("processor") in {"yolo", "simple_yolo"}:
             processor = YoloDocumentSegmenter(config)
             images, names = processor.step_by_step_yolo(image)
         elif (config or {}).get("processor") == "hough":

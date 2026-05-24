@@ -5,6 +5,6 @@ __pycache__/
 *.pyo
 *.pyd
 *.log
-uploads/
+uploads/   
 .codex/
 .agents/
