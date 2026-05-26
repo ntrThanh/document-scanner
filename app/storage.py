@@ -1,5 +1,6 @@
 import os
 import shutil
+import threading
 import uuid
 from io import BytesIO
 from datetime import datetime
@@ -11,9 +12,15 @@ from PIL import Image, ImageOps
 
 class JobStore:
     def __init__(self):
+        self.lock = threading.RLock()
         self.images: Dict[str, Dict] = {}
         self.queue: List[str] = []
-        self.is_processing = False
+        self.active_jobs = set()
+
+    @property
+    def is_processing(self):
+        with self.lock:
+            return bool(self.active_jobs or self.queue)
 
     def add_image(self, filename: str, path: str):
         image_id = uuid.uuid4().hex
@@ -29,52 +36,103 @@ class JobStore:
             "ocr_source": None,
             "error": None,
         }
-        self.images[image_id] = item
-        self.queue.append(image_id)
+        with self.lock:
+            self.images[image_id] = item
+            self.queue.append(image_id)
         return item
 
     def list_images(self):
-        return list(self.images.values())
+        with self.lock:
+            return [item.copy() for item in self.images.values()]
 
     def get(self, image_id):
-        return self.images.get(image_id)
+        with self.lock:
+            return self.images.get(image_id)
+
+    def update(self, image_id: str, **fields):
+        with self.lock:
+            item = self.images.get(image_id)
+            if item:
+                item.update(fields)
+            return item
+
+    def has_active(self, image_ids):
+        with self.lock:
+            return any(image_id in self.active_jobs for image_id in image_ids)
 
     def reset_for_run(self, image_ids=None):
-        target_ids = image_ids or list(self.images.keys())
-        self.queue = []
-        seen = set()
-        for image_id in target_ids:
-            if image_id in seen:
-                continue
-            seen.add(image_id)
-            image = self.images.get(image_id)
-            if image:
-                image["status"] = "queued"
-                image["progress"] = 0
-                image["results"] = []
-                image["ocr_results"] = []
-                image["ocr_source"] = None
-                image["error"] = None
-                self.queue.append(image_id)
+        with self.lock:
+            target_ids = image_ids or list(self.images.keys())
+            self.queue = [queued_id for queued_id in self.queue if queued_id not in target_ids]
+            queued = []
+            seen = set()
+            for image_id in target_ids:
+                if image_id in seen or image_id in self.active_jobs:
+                    continue
+                seen.add(image_id)
+                image = self.images.get(image_id)
+                if image:
+                    image["status"] = "queued"
+                    image["progress"] = 0
+                    image["results"] = []
+                    image["ocr_results"] = []
+                    image["ocr_source"] = None
+                    image["error"] = None
+                    self.queue.append(image_id)
+                    queued.append(image_id)
+            return queued
+
+    def take_next(self):
+        with self.lock:
+            while self.queue:
+                image_id = self.queue.pop(0)
+                item = self.images.get(image_id)
+                if not item or image_id in self.active_jobs:
+                    continue
+                self.active_jobs.add(image_id)
+                item["status"] = "processing"
+                item["progress"] = 10
+                item["error"] = None
+                return image_id, item.copy()
+            return None, None
+
+    def complete(self, image_id: str, results=None, error: Optional[str] = None):
+        with self.lock:
+            item = self.images.get(image_id)
+            if item:
+                if error:
+                    item["status"] = "error"
+                    item["error"] = error
+                else:
+                    item["status"] = "done"
+                    item["results"] = results or []
+                    item["error"] = None
+                item["progress"] = 100
+            self.active_jobs.discard(image_id)
 
     def remove(self, image_id: str) -> Optional[Dict]:
-        item = self.images.pop(image_id, None)
-        self.queue = [queued_id for queued_id in self.queue if queued_id != image_id]
-        return item
+        with self.lock:
+            item = self.images.pop(image_id, None)
+            self.queue = [queued_id for queued_id in self.queue if queued_id != image_id]
+            self.active_jobs.discard(image_id)
+            return item
 
     def remove_by_filename(self, filename: str) -> List[Dict]:
         removed = []
-        for image_id, item in list(self.images.items()):
-            if item.get("filename") == filename:
+        with self.lock:
+            items = list(self.images.items())
+        for image_id, item in items:
+            if item.get("filename") == filename and image_id not in self.active_jobs:
                 removed_item = self.remove(image_id)
                 if removed_item:
                     removed.append(removed_item)
         return removed
 
     def clear(self):
-        self.images.clear()
-        self.queue.clear()
-        self.is_processing = False
+        with self.lock:
+            self.images.clear()
+            self.queue.clear()
+            self.active_jobs.clear()
 
 
 def safe_remove_path(path: str):

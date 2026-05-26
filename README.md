@@ -67,29 +67,47 @@ uv pip install -U "mineru[all]"
 
 ## Chạy Ứng Dụng
 
-Chạy bằng Uvicorn:
+Chạy dev bằng Uvicorn có reload:
 
 ```bash
-uvicorn main:app --reload
+bash script.sh dev
 ```
 
 Mở trình duyệt tại:
 
 ```text
-http://127.0.0.1:8000
+http://127.0.0.1:8888
 ```
 
-Hoặc chạy theo script có sẵn:
+Chạy production bằng Gunicorn + Uvicorn worker:
 
 ```bash
 bash script.sh
 ```
 
-Script hiện chạy server tại:
+Server mặc định chạy tại:
 
 ```text
 http://0.0.0.0:8888
 ```
+
+### Cấu Hình Chạy Nhiều Người Dùng
+
+Backend đã có hàng đợi xử lý ảnh song song trong cùng một process. Chỉnh số job chạy đồng thời bằng biến môi trường:
+
+```bash
+SCAN_MAX_CONCURRENT_JOBS=2 SCAN_MAX_CONCURRENT_OCR=1 bash script.sh
+```
+
+Gợi ý cấu hình:
+
+| Máy chạy | `SCAN_MAX_CONCURRENT_JOBS` | `SCAN_MAX_CONCURRENT_OCR` |
+| --- | ---: | ---: |
+| CPU laptop/PC thường | 1-2 | 1 |
+| CPU nhiều core | 2-4 | 1-2 |
+| GPU dùng YOLO/MinerU | 1-2 | 1 |
+
+Project hiện lưu trạng thái job trong RAM, vì vậy production config mặc định dùng `WEB_CONCURRENCY=1`. Không tăng nhiều Gunicorn worker nếu chưa chuyển `JobStore` sang Redis/database, vì mỗi worker sẽ có hàng đợi riêng và frontend có thể poll nhầm worker.
 
 ## Cách Sử Dụng
 
@@ -235,7 +253,7 @@ Các thư mục runtime:
 - MinerU là dependency tùy chọn, chỉ cần cài khi dùng OCR. Nếu máy chưa có lệnh `mineru`, chức năng OCR sẽ báo lỗi.
 - OCR có thể chạy lâu với tài liệu nhiều bảng, công thức, ảnh lớn hoặc khi chạy trên máy không có GPU.
 - Dữ liệu upload và output được lưu local trong `uploads/` và `outputs/`; nếu chạy lâu cần xóa cache định kỳ để tránh đầy ổ đĩa.
-- Hệ thống hiện chỉ dùng một hàng chờ xử lý trong memory, chưa phù hợp cho nhiều người dùng chạy đồng thời.
+- Hệ thống dùng hàng đợi trong memory và có thể xử lý nhiều ảnh/request đồng thời trong một process, nhưng chưa phù hợp để scale nhiều process hoặc nhiều máy nếu chưa chuyển trạng thái job sang Redis/database.
 - Project chưa có cơ chế đăng nhập, phân quyền, giới hạn dung lượng upload hoặc tự động dọn file theo thời gian.
 - Đây là demo/prototype phục vụ học tập và thử nghiệm, chưa phải service production.
 

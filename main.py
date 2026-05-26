@@ -1,10 +1,11 @@
 import asyncio
+import copy
 import mimetypes
 import os
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-from fastapi import BackgroundTasks, FastAPI, File, HTTPException, UploadFile
+from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -35,6 +36,13 @@ store = JobStore()
 runner = SegmentationRunner(OUTPUT_DIR)
 ocr_runner = MinerURunner(OUTPUT_DIR)
 active_yolo_model = {"filename": None, "path": None}
+MAX_CONCURRENT_JOBS = max(1, int(os.getenv("SCAN_MAX_CONCURRENT_JOBS", "2")))
+MAX_CONCURRENT_OCR = max(1, int(os.getenv("SCAN_MAX_CONCURRENT_OCR", "1")))
+_ocr_semaphore = asyncio.Semaphore(MAX_CONCURRENT_OCR)
+_scheduler_lock = asyncio.Lock()
+_scheduler_task = None
+_worker_tasks = set()
+_job_configs: Dict[str, Dict[str, Any]] = {}
 
 
 class RunRequest(BaseModel):
@@ -231,17 +239,21 @@ async def upload_images(files: List[UploadFile] = File(...)):
 
 
 @app.post("/api/run")
-async def run_pipeline(payload: RunRequest, background_tasks: BackgroundTasks):
-    if store.is_processing:
-        return {"message": "Pipeline đang chạy", "status": "processing"}
-
+async def run_pipeline(payload: RunRequest):
     image_ids = payload.image_ids or [image["id"] for image in store.list_images()]
     image_ids = list(dict.fromkeys(image_ids))
 
     if not image_ids:
         raise HTTPException(status_code=400, detail="Chưa có ảnh nào trong hàng chờ")
 
-    config = payload.config or DEFAULT_CONFIG
+    if store.has_active(image_ids):
+        raise HTTPException(status_code=409, detail="Một số ảnh đang được xử lý, vui lòng đợi job hiện tại xong")
+
+    missing_ids = [image_id for image_id in image_ids if not store.get(image_id)]
+    if missing_ids:
+        raise HTTPException(status_code=404, detail="Không tìm thấy một số ảnh trong danh sách xử lý")
+
+    config = copy.deepcopy(payload.config or DEFAULT_CONFIG)
     if config.get("processor") in {"yolo", "simple_yolo"}:
         if not active_yolo_model["path"] or not os.path.exists(active_yolo_model["path"]):
             _load_existing_yolo_model()
@@ -249,37 +261,68 @@ async def run_pipeline(payload: RunRequest, background_tasks: BackgroundTasks):
             raise HTTPException(status_code=400, detail="Bạn cần upload file YOLO .pt trước khi chạy chế độ YOLO")
         config.setdefault("yolo", {})["model_path"] = active_yolo_model["path"]
 
-    # Xóa kết quả cũ của các ảnh sắp chạy, tránh frontend đọc lại output cũ.
-    for image_id in image_ids:
-        safe_remove_path(os.path.join(OUTPUT_DIR, image_id))
+    global _scheduler_task
+    async with _scheduler_lock:
+        queued_ids = store.reset_for_run(image_ids)
 
-    store.reset_for_run(image_ids)
-    background_tasks.add_task(process_queue, config)
-    return {"message": "Đã bắt đầu xử lý", "status": "started", "total": len(image_ids)}
+        # Xóa kết quả cũ của các ảnh thật sự được đưa lại vào queue.
+        for image_id in queued_ids:
+            safe_remove_path(os.path.join(OUTPUT_DIR, image_id))
+
+        for image_id in queued_ids:
+            _job_configs[image_id] = copy.deepcopy(config)
+
+        if _scheduler_task is None or _scheduler_task.done():
+            _scheduler_task = asyncio.create_task(_scheduler_loop())
+    return {
+        "message": "Đã đưa vào hàng chờ xử lý",
+        "status": "started",
+        "total": len(queued_ids),
+        "max_concurrent_jobs": MAX_CONCURRENT_JOBS,
+    }
 
 
-async def process_queue(config: Dict[str, Any]):
-    store.is_processing = True
+async def _scheduler_loop():
+    global _scheduler_task
     try:
-        while store.queue:
-            image_id = store.queue.pop(0)
-            item = store.get(image_id)
-            if not item:
-                continue
-            item["status"] = "processing"
-            item["progress"] = 10
-            await asyncio.sleep(0.05)
-            try:
-                results = runner.process_image(image_id, item["path"], config)
-                item["results"] = results
-                item["status"] = "done"
-                item["progress"] = 100
-            except Exception as exc:
-                item["status"] = "error"
-                item["progress"] = 100
-                item["error"] = str(exc)
+        while True:
+            async with _scheduler_lock:
+                _cleanup_finished_workers()
+                while len(_worker_tasks) < MAX_CONCURRENT_JOBS:
+                    image_id, item = store.take_next()
+                    if not image_id:
+                        break
+                    config = _job_configs.pop(image_id, copy.deepcopy(DEFAULT_CONFIG))
+                    task = asyncio.create_task(_process_image_job(image_id, item["path"], config))
+                    _worker_tasks.add(task)
+
+                should_stop = not _worker_tasks and not store.is_processing
+
+            if should_stop:
+                break
+            await asyncio.sleep(0.2)
     finally:
-        store.is_processing = False
+        async with _scheduler_lock:
+            _cleanup_finished_workers()
+            _scheduler_task = None
+
+
+def _cleanup_finished_workers():
+    done_tasks = {task for task in _worker_tasks if task.done()}
+    for task in done_tasks:
+        try:
+            task.result()
+        except Exception:
+            pass
+    _worker_tasks.difference_update(done_tasks)
+
+
+async def _process_image_job(image_id: str, image_path: str, config: Dict[str, Any]):
+    try:
+        results = await asyncio.to_thread(runner.process_image, image_id, image_path, config)
+        store.complete(image_id, results=results)
+    except Exception as exc:
+        store.complete(image_id, error=str(exc))
 
 
 @app.get("/api/status")
@@ -323,9 +366,6 @@ async def get_results(image_id: str):
 
 @app.post("/api/ocr/{image_id}")
 async def run_ocr(image_id: str, payload: OcrRequest):
-    if store.is_processing:
-        raise HTTPException(status_code=409, detail="Pipeline đang chạy, vui lòng đợi xử lý xong rồi OCR")
-
     item = store.get(image_id)
     if not item:
         raise HTTPException(status_code=404, detail="Không tìm thấy ảnh")
@@ -335,17 +375,17 @@ async def run_ocr(image_id: str, payload: OcrRequest):
     source_path, source_filename = _pick_ocr_source(item, payload.source_filename)
     config = payload.config or DEFAULT_CONFIG
     try:
-        ocr_results = await asyncio.to_thread(
-            ocr_runner.process_result_image,
-            image_id,
-            source_path,
-            config,
-        )
+        async with _ocr_semaphore:
+            ocr_results = await asyncio.to_thread(
+                ocr_runner.process_result_image,
+                image_id,
+                source_path,
+                config,
+            )
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
-    item["ocr_results"] = ocr_results
-    item["ocr_source"] = source_filename
+    store.update(image_id, ocr_results=ocr_results, ocr_source=source_filename)
     return {
         "message": "Đã OCR bằng MinerU",
         "source_filename": source_filename,
@@ -355,9 +395,6 @@ async def run_ocr(image_id: str, payload: OcrRequest):
 
 @app.post("/api/export/pdf")
 async def export_pdf(payload: PdfExportRequest):
-    if store.is_processing:
-        raise HTTPException(status_code=409, detail="Pipeline đang chạy, vui lòng đợi xử lý xong rồi xuất PDF")
-
     image_ids = payload.image_ids or [image["id"] for image in store.list_images()]
     image_ids = list(dict.fromkeys(image_ids))
 

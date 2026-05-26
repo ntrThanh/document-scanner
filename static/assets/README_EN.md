@@ -67,29 +67,47 @@ uv pip install -U "mineru[all]"
 
 ## Run
 
-Start the app with Uvicorn:
+Start the development server with Uvicorn reload:
 
 ```bash
-uvicorn main:app --reload
+bash script.sh dev
 ```
 
 Open:
 
 ```text
-http://127.0.0.1:8000
+http://127.0.0.1:8888
 ```
 
-You can also use the provided script:
+Start the production server with Gunicorn + Uvicorn worker:
 
 ```bash
 bash script.sh
 ```
 
-The script starts the server at:
+The server listens on:
 
 ```text
 http://0.0.0.0:8888
 ```
+
+### Multi-User Concurrency
+
+The backend now processes scan jobs concurrently inside one process. Tune the limits with environment variables:
+
+```bash
+SCAN_MAX_CONCURRENT_JOBS=2 SCAN_MAX_CONCURRENT_OCR=1 bash script.sh
+```
+
+Recommended starting points:
+
+| Machine | `SCAN_MAX_CONCURRENT_JOBS` | `SCAN_MAX_CONCURRENT_OCR` |
+| --- | ---: | ---: |
+| Typical laptop/desktop CPU | 1-2 | 1 |
+| High-core CPU server | 2-4 | 1-2 |
+| GPU for YOLO/MinerU | 1-2 | 1 |
+
+Job state is still stored in process memory, so the production config defaults to `WEB_CONCURRENCY=1`. Do not raise Gunicorn workers until `JobStore` is moved to Redis or a database; otherwise each worker will have a separate queue and browser polling can hit the wrong worker.
 
 ## Usage
 
@@ -235,7 +253,7 @@ Runtime directories:
 - MinerU is optional; OCR will fail if the `mineru` command is not installed.
 - OCR may be slow for large images, dense documents, tables, formulas, or CPU-only environments.
 - Uploaded files and generated outputs are stored locally and should be cleaned periodically.
-- The current queue is in memory and is not designed for concurrent multi-user production traffic.
+- The in-memory queue can handle multiple simultaneous jobs/requests in one process, but scaling across multiple processes or machines still requires moving job state to Redis or a database.
 - There is no authentication, authorization, upload size control, or automatic retention policy yet.
 - This repository is a learning/prototype project, not a hardened production service.
 
