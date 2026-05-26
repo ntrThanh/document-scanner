@@ -45,6 +45,7 @@ const viewerClose = document.getElementById("viewerClose");
 const viewerZoomIn = document.getElementById("viewerZoomIn");
 const viewerZoomOut = document.getElementById("viewerZoomOut");
 const viewerZoomReset = document.getElementById("viewerZoomReset");
+const exportPdfBtn = document.getElementById("exportPdfBtn");
 
 const CONFIG_STORAGE_KEY = "documentSegmentation:lastConfig:v14";
 
@@ -538,6 +539,7 @@ function setRunningState(running) {
         runBtn.disabled = running;
         runBtn.textContent = running ? "Đang chạy..." : "Chạy pipeline";
     }
+    updateExportPdfState();
 }
 
 function resetResultsView(message = "Chưa có kết quả") {
@@ -590,6 +592,12 @@ function removeExistingResultCards(imageId, filename) {
     }
 
     document.querySelectorAll(selectors.join(",")).forEach(card => card.remove());
+}
+
+function updateExportPdfState() {
+    if (!exportPdfBtn) return;
+    const hasDoneImages = latestImages.some(image => image.status === "done");
+    exportPdfBtn.disabled = isRunning || !hasDoneImages;
 }
 
 document.querySelectorAll('input[name="processor"]').forEach(input => {
@@ -657,6 +665,7 @@ async function uploadSelectedFiles() {
     fileInput.value = "";
     selectedFiles.innerHTML = "Upload thành công";
     await refreshStatus({renderDone: false});
+    updateExportPdfState();
     return true;
 }
 
@@ -738,12 +747,14 @@ clearBtn?.addEventListener("click", async () => {
         resetResultsView();
         selectedFiles.innerHTML = data.kept_yolo_model ? "Đã xóa cache ảnh/kết quả. Model YOLO vẫn được giữ." : "Đã xóa cache ảnh/kết quả.";
         setRunningState(false);
+        updateExportPdfState();
     } catch (error) {
         alert(error.message || "Không thể xóa dữ liệu");
     }
 });
 
 defaultBtn?.addEventListener("click", applyDefaultConfig);
+exportPdfBtn?.addEventListener("click", exportPdf);
 
 document.addEventListener("change", event => {
     const target = event.target;
@@ -768,6 +779,7 @@ async function refreshStatus(options = {}) {
         const data = await fetchJson("/api/status");
         const images = Array.isArray(data.images) ? data.images : [];
         latestImages = images;
+        updateExportPdfState();
 
         renderQueue(images);
         renderManualImageList(images);
@@ -1069,6 +1081,59 @@ async function renderResult(imageId, statusFilename = "") {
     `;
 
     results.prepend(card);
+}
+
+async function exportPdf() {
+    if (!exportPdfBtn) return;
+
+    const imageIds = latestImages
+        .filter(image => image.status === "done")
+        .map(image => image.id);
+
+    if (!imageIds.length) {
+        alert("Chưa có ảnh đã xử lý xong để xuất PDF");
+        return;
+    }
+
+    exportPdfBtn.disabled = true;
+    const oldText = exportPdfBtn.textContent;
+    exportPdfBtn.textContent = "Đang xuất...";
+
+    try {
+        const response = await fetch("/api/export/pdf", {
+            method: "POST",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({image_ids: imageIds})
+        });
+
+        if (!response.ok) {
+            let data = {};
+            try {
+                data = await response.json();
+            } catch (_) {
+                data = {};
+            }
+            throw new Error(data.detail || data.message || `Xuất PDF lỗi: ${response.status}`);
+        }
+
+        const blob = await response.blob();
+        const disposition = response.headers.get("content-disposition") || "";
+        const filenameMatch = disposition.match(/filename="?([^";]+)"?/i);
+        const filename = filenameMatch ? filenameMatch[1] : "scan.pdf";
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = filename;
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        URL.revokeObjectURL(url);
+    } catch (error) {
+        alert(error.message || "Không thể xuất PDF");
+    } finally {
+        exportPdfBtn.textContent = oldText;
+        updateExportPdfState();
+    }
 }
 
 function renderOcrSection(ocrResults) {

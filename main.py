@@ -1,6 +1,7 @@
 import asyncio
 import mimetypes
 import os
+from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from fastapi import BackgroundTasks, FastAPI, File, HTTPException, UploadFile
@@ -8,6 +9,7 @@ from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from fastapi import Request
+from PIL import Image
 from pydantic import BaseModel
 
 from app.ocr import MinerURunner
@@ -43,6 +45,10 @@ class RunRequest(BaseModel):
 class OcrRequest(BaseModel):
     source_filename: Optional[str] = None
     config: Optional[Dict[str, Any]] = None
+
+
+class PdfExportRequest(BaseModel):
+    image_ids: Optional[List[str]] = None
 
 
 def _latest_yolo_model():
@@ -136,6 +142,35 @@ def _pick_ocr_source(item: Dict[str, Any], source_filename: Optional[str] = None
             return path, result["filename"]
 
     raise HTTPException(status_code=404, detail="Không tìm thấy ảnh kết quả để OCR")
+
+
+def _pick_pdf_source(item: Dict[str, Any]):
+    candidates = [
+        result
+        for result in item.get("results", [])
+        if (result.get("type") in {None, "image"}) and result.get("filename")
+    ]
+    if not candidates:
+        raise HTTPException(status_code=400, detail=f"Ảnh {item.get('filename')} chưa có kết quả để xuất PDF")
+
+    for result in reversed(candidates):
+        path = _safe_output_path(item["id"], result["filename"])
+        if os.path.isfile(path):
+            return path
+
+    raise HTTPException(status_code=404, detail=f"Không tìm thấy file kết quả của ảnh {item.get('filename')}")
+
+
+def _image_to_pdf_page(path: str):
+    with Image.open(path) as img:
+        img.load()
+        if img.mode == "RGBA":
+            background = Image.new("RGB", img.size, "white")
+            background.paste(img, mask=img.getchannel("A"))
+            return background
+        if img.mode != "RGB":
+            return img.convert("RGB")
+        return img.copy()
 
 
 _load_existing_yolo_model()
@@ -316,6 +351,46 @@ async def run_ocr(image_id: str, payload: OcrRequest):
         "source_filename": source_filename,
         "ocr_results": ocr_results,
     }
+
+
+@app.post("/api/export/pdf")
+async def export_pdf(payload: PdfExportRequest):
+    if store.is_processing:
+        raise HTTPException(status_code=409, detail="Pipeline đang chạy, vui lòng đợi xử lý xong rồi xuất PDF")
+
+    image_ids = payload.image_ids or [image["id"] for image in store.list_images()]
+    image_ids = list(dict.fromkeys(image_ids))
+
+    if not image_ids:
+        raise HTTPException(status_code=400, detail="Chưa có ảnh nào để xuất PDF")
+
+    items = []
+    for image_id in image_ids:
+        item = store.get(image_id)
+        if not item:
+            raise HTTPException(status_code=404, detail="Không tìm thấy ảnh trong danh sách xuất PDF")
+        if item.get("status") != "done":
+            raise HTTPException(status_code=400, detail=f"Ảnh {item.get('filename')} chưa xử lý xong")
+        items.append(item)
+
+    pages = []
+    try:
+        for item in items:
+            pages.append(_image_to_pdf_page(_pick_pdf_source(item)))
+
+        if not pages:
+            raise HTTPException(status_code=400, detail="Không có ảnh kết quả để xuất PDF")
+
+        export_dir = os.path.join(OUTPUT_DIR, "exports")
+        os.makedirs(export_dir, exist_ok=True)
+        pdf_name = f"scan_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
+        pdf_path = os.path.join(export_dir, pdf_name)
+        pages[0].save(pdf_path, "PDF", resolution=150.0, save_all=True, append_images=pages[1:])
+    finally:
+        for page in pages:
+            page.close()
+
+    return FileResponse(pdf_path, filename=pdf_name, media_type="application/pdf")
 
 
 @app.get("/api/download/{image_id}/{file_path:path}")
